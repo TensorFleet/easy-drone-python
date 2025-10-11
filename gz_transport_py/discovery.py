@@ -1,27 +1,24 @@
 """
-Discovery protocol implementation using UDP multicast.
+Discovery protocol implementation using protobuf messages.
 
-This implements a simplified version of the gz-transport discovery protocol.
+This implements gz-transport discovery protocol using the actual
+protobuf Discovery message format for compatibility with C++ gz-transport.
 """
 
 import socket
 import struct
 import threading
 import time
-import uuid
-import json
 from typing import Callable, Dict, List, Optional
 from dataclasses import dataclass, asdict
 from .options import Scope
 
-
-# Discovery message types
-class MsgType:
-    ADVERTISE = "advertise"
-    UNADVERTISE = "unadvertise"
-    SUBSCRIBE = "subscribe"
-    HEARTBEAT = "heartbeat"
-    BYE = "bye"
+# Import gz.msgs Discovery protobuf
+try:
+    from gz.msgs.discovery_pb2 import Discovery as DiscoveryMsg
+    from gz.msgs.header_pb2 import Header
+except ImportError:
+    raise ImportError("gz.msgs not available. Install with: pip install -e .")
 
 
 @dataclass
@@ -45,13 +42,15 @@ class PublisherInfo:
 class Discovery:
     """
     Handles discovery of publishers and subscribers via UDP multicast.
+    Uses protobuf messages for compatibility with C++ gz-transport.
     """
     
     # Default discovery settings
     MULTICAST_GROUP = '239.255.0.7'
     MULTICAST_PORT = 11317
     HEARTBEAT_INTERVAL = 1.0  # seconds
-    SILENCE_TIMEOUT = 3.0     # seconds
+    SILENCE_TIMEOUT = 5.0     # seconds (increased for C++ compatibility)
+    PROTOCOL_VERSION = 9       # gz-transport protocol version
     
     # Shared instance per process
     _instance: Optional['Discovery'] = None
@@ -85,8 +84,10 @@ class Discovery:
         self.process_uuid = process_uuid
         self.verbose = verbose
         
-        # Storage for discovered publishers
+        # Storage for discovered publishers (keyed by topic)
         self.publishers: Dict[str, List[PublisherInfo]] = {}
+        # Store by publisher identifier (process_uuid:node_uuid:topic)
+        self.publisher_map: Dict[str, PublisherInfo] = {}
         self.last_heartbeat: Dict[str, float] = {}
         
         # Callbacks
@@ -98,6 +99,7 @@ class Discovery:
         self.lock = threading.RLock()
         self.recv_thread: Optional[threading.Thread] = None
         self.heartbeat_thread: Optional[threading.Thread] = None
+        self.cleanup_thread: Optional[threading.Thread] = None
         
         # Local publishers (advertised by this process)
         self.local_publishers: List[PublisherInfo] = []
@@ -138,8 +140,12 @@ class Discovery:
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
         
+        # Start cleanup thread
+        self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self.cleanup_thread.start()
+        
         if self.verbose:
-            print(f"[Discovery] Started (UUID: {self.process_uuid})")
+            print(f"[Discovery] Started (UUID: {self.process_uuid}, Protocol: protobuf)")
     
     def _shutdown(self):
         """Internal shutdown method (called by release_instance)."""
@@ -149,13 +155,15 @@ class Discovery:
             self.running = False
         
         # Send BYE message
-        self._send_message(MsgType.BYE, {})
+        self._send_bye()
         
         # Wait for threads
         if self.recv_thread:
             self.recv_thread.join(timeout=1.0)
         if self.heartbeat_thread:
             self.heartbeat_thread.join(timeout=1.0)
+        if self.cleanup_thread:
+            self.cleanup_thread.join(timeout=1.0)
         
         self.sock.close()
         
@@ -173,7 +181,7 @@ class Discovery:
             self.local_publishers.append(pub_info)
         
         # Broadcast advertisement
-        self._send_message(MsgType.ADVERTISE, pub_info.to_dict())
+        self._send_advertise(pub_info)
         
         if self.verbose:
             print(f"[Discovery] Advertised: {pub_info.topic}")
@@ -181,16 +189,15 @@ class Discovery:
     def unadvertise(self, topic: str, node_uuid: str):
         """Unadvertise a publisher."""
         with self.lock:
-            self.local_publishers = [
-                p for p in self.local_publishers 
-                if not (p.topic == topic and p.node_uuid == node_uuid)
-            ]
-        
-        self._send_message(MsgType.UNADVERTISE, {
-            'topic': topic,
-            'node_uuid': node_uuid,
-            'process_uuid': self.process_uuid
-        })
+            pub_to_remove = None
+            for p in self.local_publishers:
+                if p.topic == topic and p.node_uuid == node_uuid:
+                    pub_to_remove = p
+                    break
+            
+            if pub_to_remove:
+                self.local_publishers.remove(pub_to_remove)
+                self._send_unadvertise(pub_to_remove)
         
         if self.verbose:
             print(f"[Discovery] Unadvertised: {topic}")
@@ -198,7 +205,7 @@ class Discovery:
     def discover(self, topic: str) -> List[PublisherInfo]:
         """Request discovery of a topic."""
         # Send subscribe request
-        self._send_message(MsgType.SUBSCRIBE, {'topic': topic})
+        self._send_subscribe(topic)
         
         # Return any already known publishers
         with self.lock:
@@ -222,209 +229,319 @@ class Discovery:
         """Register callback for publisher disconnection."""
         self.disconnection_callbacks.append(callback)
     
-    def _send_message(self, msg_type: str, data: dict):
-        """Send a discovery message."""
-        message = {
-            'type': msg_type,
-            'process_uuid': self.process_uuid,
-            'data': data
-        }
+    # =========================================================================
+    # Protobuf Message Creation and Sending
+    # =========================================================================
+    
+    def _send_advertise(self, pub_info: PublisherInfo):
+        """Send ADVERTISE message using protobuf."""
+        disc = DiscoveryMsg()
+        disc.version = self.PROTOCOL_VERSION
+        disc.process_uuid = self.process_uuid
+        disc.type = DiscoveryMsg.ADVERTISE
         
-        msg_bytes = json.dumps(message).encode('utf-8')
+        # Fill publisher info
+        pub = disc.pub
+        pub.topic = pub_info.topic
+        pub.address = pub_info.address
+        pub.process_uuid = pub_info.process_uuid
+        pub.node_uuid = pub_info.node_uuid
         
+        # Map scope
+        if pub_info.scope == "process":
+            pub.scope = DiscoveryMsg.Publisher.PROCESS
+        elif pub_info.scope == "host":
+            pub.scope = DiscoveryMsg.Publisher.HOST
+        else:
+            pub.scope = DiscoveryMsg.Publisher.ALL
+        
+        # Fill message publisher info
+        msg_pub = pub.msg_pub
+        msg_pub.ctrl = pub_info.address
+        msg_pub.msg_type = pub_info.msg_type
+        msg_pub.throttled = False
+        msg_pub.msgs_per_sec = 0
+        
+        self._send_protobuf(disc)
+    
+    def _send_unadvertise(self, pub_info: PublisherInfo):
+        """Send UNADVERTISE message using protobuf."""
+        disc = DiscoveryMsg()
+        disc.version = self.PROTOCOL_VERSION
+        disc.process_uuid = self.process_uuid
+        disc.type = DiscoveryMsg.UNADVERTISE
+        
+        pub = disc.pub
+        pub.topic = pub_info.topic
+        pub.process_uuid = pub_info.process_uuid
+        pub.node_uuid = pub_info.node_uuid
+        
+        self._send_protobuf(disc)
+    
+    def _send_subscribe(self, topic: str):
+        """Send SUBSCRIBE message using protobuf."""
+        disc = DiscoveryMsg()
+        disc.version = self.PROTOCOL_VERSION
+        disc.process_uuid = self.process_uuid
+        disc.type = DiscoveryMsg.SUBSCRIBE
+        
+        sub = disc.sub
+        sub.topic = topic
+        
+        self._send_protobuf(disc)
+    
+    def _send_heartbeat(self):
+        """Send HEARTBEAT message using protobuf."""
+        disc = DiscoveryMsg()
+        disc.version = self.PROTOCOL_VERSION
+        disc.process_uuid = self.process_uuid
+        disc.type = DiscoveryMsg.HEARTBEAT
+        
+        self._send_protobuf(disc)
+    
+    def _send_bye(self):
+        """Send BYE message using protobuf."""
+        disc = DiscoveryMsg()
+        disc.version = self.PROTOCOL_VERSION
+        disc.process_uuid = self.process_uuid
+        disc.type = DiscoveryMsg.BYE
+        
+        self._send_protobuf(disc)
+    
+    def _send_protobuf(self, disc_msg: DiscoveryMsg):
+        """Send a protobuf discovery message via multicast."""
         try:
+            msg_bytes = disc_msg.SerializeToString()
             self.sock.sendto(
                 msg_bytes,
                 (self.MULTICAST_GROUP, self.MULTICAST_PORT)
             )
         except Exception as e:
             if self.verbose:
-                print(f"[Discovery] Error sending message: {e}")
+                print(f"[Discovery] Error sending protobuf message: {e}")
+    
+    # =========================================================================
+    # Message Reception and Parsing
+    # =========================================================================
     
     def _recv_loop(self):
         """Receive and process discovery messages."""
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(65535)
-                self._handle_message(data, addr)
+                self._handle_protobuf_message(data, addr)
             except socket.timeout:
-                # Check for stale publishers
-                self._check_timeouts()
+                continue
             except Exception as e:
                 if self.running and self.verbose:
-                    print(f"[Discovery] Receive error: {e}")
+                    print(f"[Discovery] Error in recv loop: {e}")
     
-    def _handle_message(self, data: bytes, addr):
-        """Handle received discovery message."""
+    def _handle_protobuf_message(self, data: bytes, addr: tuple):
+        """Handle incoming protobuf discovery message."""
         try:
-            message = json.loads(data.decode('utf-8'))
+            disc = DiscoveryMsg()
+            disc.ParseFromString(data)
             
-            msg_type = message['type']
-            process_uuid = message['process_uuid']
-            msg_data = message['data']
-            
-            # Ignore our own messages
-            if process_uuid == self.process_uuid:
+            # Ignore messages from ourselves
+            if disc.process_uuid == self.process_uuid:
                 return
             
-            # Update heartbeat timestamp
-            with self.lock:
-                self.last_heartbeat[process_uuid] = time.time()
+            msg_type = DiscoveryMsg.Type.Name(disc.type)
             
-            if msg_type == MsgType.ADVERTISE:
-                self._handle_advertise(msg_data)
-            elif msg_type == MsgType.UNADVERTISE:
-                self._handle_unadvertise(msg_data)
-            elif msg_type == MsgType.SUBSCRIBE:
-                self._handle_subscribe(msg_data)
-            elif msg_type == MsgType.HEARTBEAT:
-                pass  # Already updated timestamp
-            elif msg_type == MsgType.BYE:
-                self._handle_bye(process_uuid)
-                
+            if disc.type == DiscoveryMsg.ADVERTISE:
+                self._handle_advertise(disc)
+            elif disc.type == DiscoveryMsg.UNADVERTISE:
+                self._handle_unadvertise(disc)
+            elif disc.type == DiscoveryMsg.SUBSCRIBE:
+                self._handle_subscribe(disc)
+            elif disc.type == DiscoveryMsg.HEARTBEAT:
+                self._handle_heartbeat(disc)
+            elif disc.type == DiscoveryMsg.BYE:
+                self._handle_bye(disc)
+            
         except Exception as e:
             if self.verbose:
-                print(f"[Discovery] Error handling message: {e}")
+                print(f"[Discovery] Error parsing protobuf message: {e}")
     
-    def _handle_advertise(self, data: dict):
+    def _handle_advertise(self, disc: DiscoveryMsg):
         """Handle ADVERTISE message."""
-        pub_info = PublisherInfo.from_dict(data)
+        pub = disc.pub
         
-        # Check scope
-        if pub_info.scope == Scope.PROCESS.value:
-            return  # Don't register remote PROCESS scope publishers
+        # Map scope back to string
+        if pub.scope == DiscoveryMsg.Publisher.PROCESS:
+            scope_str = "process"
+        elif pub.scope == DiscoveryMsg.Publisher.HOST:
+            scope_str = "host"
+        else:
+            scope_str = "all"
+        
+        # Get message type
+        msg_type = pub.msg_pub.msg_type if pub.HasField('msg_pub') else ""
+        
+        pub_info = PublisherInfo(
+            topic=pub.topic,
+            msg_type=msg_type,
+            address=pub.address,
+            process_uuid=pub.process_uuid,
+            node_uuid=pub.node_uuid,
+            scope=scope_str
+        )
+        
+        pub_id = f"{pub.process_uuid}:{pub.node_uuid}:{pub.topic}"
         
         with self.lock:
-            topic = pub_info.topic
-            if topic not in self.publishers:
-                self.publishers[topic] = []
+            # Check if this is a new publisher
+            is_new = pub_id not in self.publisher_map
             
-            # Check if already exists
-            exists = any(
-                p.process_uuid == pub_info.process_uuid and 
-                p.node_uuid == pub_info.node_uuid
-                for p in self.publishers[topic]
-            )
+            # Add to our maps
+            self.publisher_map[pub_id] = pub_info
+            self.last_heartbeat[pub_id] = time.time()
             
-            if not exists:
-                self.publishers[topic].append(pub_info)
+            # Add to topic-based index
+            if pub.topic not in self.publishers:
+                self.publishers[pub.topic] = []
+            
+            # Update or add to topic list
+            existing = [p for p in self.publishers[pub.topic] 
+                       if p.process_uuid == pub.process_uuid and p.node_uuid == pub.node_uuid]
+            if existing:
+                # Update existing
+                idx = self.publishers[pub.topic].index(existing[0])
+                self.publishers[pub.topic][idx] = pub_info
+            else:
+                # Add new
+                self.publishers[pub.topic].append(pub_info)
+        
+        # Notify callbacks for new publishers
+        if is_new:
+            if self.verbose:
+                print(f"[Discovery] Discovered publisher: {pub.topic} @ {pub.address}")
+            for callback in self.connection_callbacks:
+                try:
+                    callback(pub_info)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[Discovery] Error in connection callback: {e}")
+    
+    def _handle_unadvertise(self, disc: DiscoveryMsg):
+        """Handle UNADVERTISE message."""
+        pub = disc.pub
+        pub_id = f"{pub.process_uuid}:{pub.node_uuid}:{pub.topic}"
+        
+        with self.lock:
+            if pub_id in self.publisher_map:
+                pub_info = self.publisher_map[pub_id]
+                del self.publisher_map[pub_id]
+                if pub_id in self.last_heartbeat:
+                    del self.last_heartbeat[pub_id]
                 
-                if self.verbose:
-                    print(f"[Discovery] New publisher: {topic} from {pub_info.process_uuid[:8]}")
+                # Remove from topic list
+                if pub.topic in self.publishers:
+                    self.publishers[pub.topic] = [
+                        p for p in self.publishers[pub.topic]
+                        if not (p.process_uuid == pub.process_uuid and p.node_uuid == pub.node_uuid)
+                    ]
+                    if not self.publishers[pub.topic]:
+                        del self.publishers[pub.topic]
                 
-                # Trigger callbacks
-                for callback in self.connection_callbacks:
+                # Notify callbacks
+                for callback in self.disconnection_callbacks:
                     try:
                         callback(pub_info)
                     except Exception as e:
                         if self.verbose:
-                            print(f"[Discovery] Callback error: {e}")
+                            print(f"[Discovery] Error in disconnection callback: {e}")
     
-    def _handle_unadvertise(self, data: dict):
-        """Handle UNADVERTISE message."""
-        topic = data['topic']
-        node_uuid = data['node_uuid']
-        process_uuid = data['process_uuid']
+    def _handle_subscribe(self, disc: DiscoveryMsg):
+        """Handle SUBSCRIBE message - respond with our publishers."""
+        sub = disc.sub
+        requested_topic = sub.topic
         
+        # Send our publishers for this topic
         with self.lock:
-            if topic in self.publishers:
-                removed = [
-                    p for p in self.publishers[topic]
-                    if p.process_uuid == process_uuid and p.node_uuid == node_uuid
-                ]
-                
-                self.publishers[topic] = [
-                    p for p in self.publishers[topic]
-                    if not (p.process_uuid == process_uuid and p.node_uuid == node_uuid)
-                ]
-                
-                if not self.publishers[topic]:
-                    del self.publishers[topic]
-                
-                # Trigger callbacks
-                for pub in removed:
-                    for callback in self.disconnection_callbacks:
-                        try:
-                            callback(pub)
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"[Discovery] Callback error: {e}")
+            for pub_info in self.local_publishers:
+                if pub_info.topic == requested_topic or requested_topic == "":
+                    self._send_advertise(pub_info)
     
-    def _handle_subscribe(self, data: dict):
-        """Handle SUBSCRIBE message - respond with our advertised topics."""
-        topic = data['topic']
-        
+    def _handle_heartbeat(self, disc: DiscoveryMsg):
+        """Handle HEARTBEAT message."""
+        # Update heartbeat timestamp for all publishers from this process
         with self.lock:
-            # Check if we have this topic
-            matching_pubs = [
-                p for p in self.local_publishers 
-                if p.topic == topic
-            ]
-        
-        # Send ADVERTISE for matching topics
-        for pub in matching_pubs:
-            self._send_message(MsgType.ADVERTISE, pub.to_dict())
+            for pub_id in list(self.last_heartbeat.keys()):
+                if pub_id.startswith(disc.process_uuid + ":"):
+                    self.last_heartbeat[pub_id] = time.time()
     
-    def _handle_bye(self, process_uuid: str):
+    def _handle_bye(self, disc: DiscoveryMsg):
         """Handle BYE message - remove all publishers from this process."""
         with self.lock:
-            removed_pubs = []
-            for topic in list(self.publishers.keys()):
-                removed = [
-                    p for p in self.publishers[topic]
-                    if p.process_uuid == process_uuid
-                ]
-                removed_pubs.extend(removed)
-                
-                self.publishers[topic] = [
-                    p for p in self.publishers[topic]
-                    if p.process_uuid != process_uuid
-                ]
-                
-                if not self.publishers[topic]:
-                    del self.publishers[topic]
+            # Find all publishers from this process
+            to_remove = [pid for pid in self.publisher_map.keys() 
+                        if pid.startswith(disc.process_uuid + ":")]
             
-            # Remove heartbeat entry
-            self.last_heartbeat.pop(process_uuid, None)
-            
-            # Trigger callbacks
-            for pub in removed_pubs:
-                for callback in self.disconnection_callbacks:
-                    try:
-                        callback(pub)
-                    except Exception as e:
-                        if self.verbose:
-                            print(f"[Discovery] Callback error: {e}")
+            for pub_id in to_remove:
+                if pub_id in self.publisher_map:
+                    pub_info = self.publisher_map[pub_id]
+                    del self.publisher_map[pub_id]
+                    if pub_id in self.last_heartbeat:
+                        del self.last_heartbeat[pub_id]
+                    
+                    # Remove from topic list
+                    if pub_info.topic in self.publishers:
+                        self.publishers[pub_info.topic] = [
+                            p for p in self.publishers[pub_info.topic]
+                            if not (p.process_uuid == pub_info.process_uuid and 
+                                   p.node_uuid == pub_info.node_uuid)
+                        ]
+                        if not self.publishers[pub_info.topic]:
+                            del self.publishers[pub_info.topic]
+    
+    # =========================================================================
+    # Background Threads
+    # =========================================================================
     
     def _heartbeat_loop(self):
-        """Send periodic heartbeats and re-advertise topics."""
+        """Send periodic heartbeat messages."""
         while self.running:
             time.sleep(self.HEARTBEAT_INTERVAL)
-            
+            if self.running:
+                self._send_heartbeat()
+                # Re-advertise our publishers periodically
+                with self.lock:
+                    for pub_info in self.local_publishers:
+                        self._send_advertise(pub_info)
+    
+    def _cleanup_loop(self):
+        """Remove stale publishers that haven't sent heartbeats."""
+        while self.running:
+            time.sleep(1.0)
             if not self.running:
                 break
             
-            # Send heartbeat
-            self._send_message(MsgType.HEARTBEAT, {})
-            
-            # Re-advertise all local publishers
+            now = time.time()
             with self.lock:
-                pubs = self.local_publishers.copy()
-            
-            for pub in pubs:
-                self._send_message(MsgType.ADVERTISE, pub.to_dict())
-    
-    def _check_timeouts(self):
-        """Check for stale publishers that haven't sent heartbeats."""
-        current_time = time.time()
-        
-        with self.lock:
-            stale_processes = [
-                puuid for puuid, last_time in self.last_heartbeat.items()
-                if current_time - last_time > self.SILENCE_TIMEOUT
-            ]
-        
-        # Remove stale publishers
-        for process_uuid in stale_processes:
-            self._handle_bye(process_uuid)
+                # Find stale publishers
+                stale = [
+                    pub_id for pub_id, last_time in self.last_heartbeat.items()
+                    if now - last_time > self.SILENCE_TIMEOUT
+                ]
+                
+                # Remove stale publishers
+                for pub_id in stale:
+                    if pub_id in self.publisher_map:
+                        pub_info = self.publisher_map[pub_id]
+                        if self.verbose:
+                            print(f"[Discovery] Removing stale publisher: {pub_info.topic}")
+                        
+                        del self.publisher_map[pub_id]
+                        del self.last_heartbeat[pub_id]
+                        
+                        # Remove from topic list
+                        if pub_info.topic in self.publishers:
+                            self.publishers[pub_info.topic] = [
+                                p for p in self.publishers[pub_info.topic]
+                                if p.process_uuid != pub_info.process_uuid or 
+                                   p.node_uuid != pub_info.node_uuid
+                            ]
+                            if not self.publishers[pub_info.topic]:
+                                del self.publishers[pub_info.topic]
 
