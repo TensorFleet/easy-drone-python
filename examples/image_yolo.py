@@ -215,15 +215,22 @@ class YoloPublisher:
             url = f"udp://127.0.0.1:{self.udp_port}?fifo_size=1000000&overrun_nonfatal=1"
             print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
             print(f"[YOLO] Stream URL: {url}")
+            print(f"[YOLO] Waiting for UDP data (this will timeout if no stream is available)...")
             
             # Try to open with retries
-            max_retries = 5
+            max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # FFmpeg options to prevent hanging and add timeout
                     container = av.open(url, options={
-                        'rtsp_transport': 'udp',
-                        'max_delay': '500000',
-                    })
+                        'timeout': '5000000',  # 5 second timeout in microseconds
+                        'max_delay': '500000',  # 0.5 second max delay
+                        'fflags': 'nobuffer',  # Minimize buffering
+                        'flags': 'low_delay',  # Low latency mode
+                        'analyzeduration': '1000000',  # 1 second to analyze stream
+                        'probesize': '1000000',  # 1MB probe size
+                    }, timeout=5.0)  # PyAV timeout in seconds
+                    
                     # Test if we can get a stream
                     if container.streams.video:
                         print(f"[YOLO] UDP stream opened successfully using PyAV!")
@@ -233,6 +240,11 @@ class YoloPublisher:
                     else:
                         print(f"[YOLO] No video stream found in container")
                         container.close()
+                except av.error.TimeoutError:
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream")
+                    if attempt < max_retries - 1:
+                        print(f"[YOLO] Retrying in 2s...")
+                        time.sleep(2)
                 except Exception as e:
                     print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {e}")
                     if attempt < max_retries - 1:
@@ -240,19 +252,30 @@ class YoloPublisher:
                         time.sleep(2)
             
             print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
+            print("\n[YOLO] Common causes:")
+            print(f"  - No video stream is being sent to port {self.udp_port}")
+            print(f"  - Video source (drone, simulator, etc.) is not running")
+            print(f"  - Firewall blocking UDP port {self.udp_port}")
+            print(f"  - Wrong port number (check video source configuration)")
             print("\n[YOLO] Troubleshooting steps:")
-            print(f"  1. Test if video stream is available using ffplay:")
+            print(f"  1. Verify video source is running and sending UDP stream")
+            print(f"")
+            print(f"  2. Test if UDP packets are arriving:")
+            print(f"     sudo tcpdump -i lo udp port {self.udp_port} -c 10")
+            print(f"     (Install with: sudo apt-get install tcpdump)")
+            print(f"     Should show packets if stream is active")
+            print(f"")
+            print(f"  3. Test stream with ffplay:")
             print(f"     ffplay -fflags nobuffer -flags low_delay udp://127.0.0.1:{self.udp_port}")
+            print(f"     (Install with: sudo apt-get install ffmpeg)")
             print(f"")
-            print(f"  2. Test with gst-launch-1.0:")
+            print(f"  4. Test with GStreamer:")
             print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
-            print(f"     (Press Ctrl+C after seeing data packets)")
+            print(f"     (Should show 'chain' messages if receiving data)")
             print(f"")
-            print(f"  3. Check if port {self.udp_port} is receiving data:")
-            print(f"     sudo netstat -tulpn | grep {self.udp_port}")
-            print(f"")
-            print(f"  4. Verify PyAV/FFmpeg is installed:")
-            print(f"     python3 -c 'import av; print(av.__version__)'")
+            print(f"  5. Check network statistics:")
+            print(f"     netstat -su | grep -i udp")
+            print(f"     (Look for UDP receive errors or dropped packets)")
             raise RuntimeError("Failed to open UDP video source")
         else:
             # Use OpenCV for video files
