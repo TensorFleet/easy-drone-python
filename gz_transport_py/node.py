@@ -44,21 +44,53 @@ class Subscriber:
         # Set socket timeout
         self.socket.setsockopt(zmq.RCVTIMEO, 100)
         
+        # Track if we've printed debug info
+        debug_printed = False
+        
         while self.running:
             try:
-                # Receive multipart message [topic, data]
+                # Receive multipart message
                 parts = self.socket.recv_multipart()
-                if len(parts) >= 2:
-                    topic = parts[0].decode('utf-8')
-                    msg_bytes = parts[1]
+                
+                # Debug: Print message structure once
+                if not debug_printed:
+                    print(f"[Subscriber] Received message with {len(parts)} parts")
+                    for i, part in enumerate(parts[:3]):  # First 3 parts only
+                        print(f"[Subscriber]   Part {i}: {len(part)} bytes")
+                    debug_printed = True
+                
+                # Try different parsing strategies based on number of parts
+                msg_bytes = None
+                
+                if len(parts) == 1:
+                    # Single part - just the message data
+                    msg_bytes = parts[0]
+                elif len(parts) >= 2:
+                    # Multi-part: Could be [topic, data] or [header, topic, data] or other formats
+                    # Try the last part first (most likely to be the actual message)
+                    msg_bytes = parts[-1]
                     
+                    # If that fails, we'll try parts[1] in the exception handler
+                
+                if msg_bytes:
                     # Deserialize and call callback
                     try:
                         msg = self.msg_type()
                         msg.ParseFromString(msg_bytes)
                         self.callback(msg)
                     except Exception as e:
-                        print(f"[Subscriber] Callback error: {e}")
+                        # If parsing last part failed and we have multiple parts, try part 1
+                        if len(parts) >= 2 and msg_bytes != parts[1]:
+                            try:
+                                msg = self.msg_type()
+                                msg.ParseFromString(parts[1])
+                                self.callback(msg)
+                            except Exception as e2:
+                                print(f"[Subscriber] Failed to parse message: {e}")
+                                print(f"[Subscriber] Message has {len(parts)} parts, tried part {len(parts)-1} and part 1")
+                        else:
+                            print(f"[Subscriber] Error parsing message with type '{self.msg_type.DESCRIPTOR.full_name}': {e}")
+                            
             except zmq.Again:
                 # Timeout, continue
                 continue
