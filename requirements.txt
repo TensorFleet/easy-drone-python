@@ -1,4 +1,4 @@
 pyzmq>=25.0.0
 protobuf>=4.21.0
-zenoh>=1.0.0
+eclipse-zenoh
 
