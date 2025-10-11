@@ -1,9 +1,28 @@
 #!/bin/bash
+# Auto-connect YOLO Inference from Gazebo Image Topic
+# Automatically discovers the publisher address and connects to it
+# Usage: ./run_image_yolo.sh <gz_topic> [additional_args...]
+
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$(dirname "$SCRIPT_DIR")/venv"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$PROJECT_DIR/venv"
 ARTIFACTS_DIR="$SCRIPT_DIR/yolo_artifacts"
+
+# Check if topic is provided
+if [ -z "$1" ]; then
+    echo "Usage: $0 <gz_topic> [additional_args...]"
+    echo "Example: $0 /world/default/model/x500/link/camera/sensor/image --visualize"
+    echo ""
+    echo "Optional environment variables:"
+    echo "  ZENOH_MODE=peer|client (default: peer)"
+    echo "  ZENOH_CONNECT=tcp://host:port (default: none)"
+    exit 1
+fi
+
+GZ_TOPIC="$1"
+shift  # Remove first argument, keep the rest
 
 # Check if setup has been run
 if [ ! -d "$VENV_DIR" ]; then
@@ -20,27 +39,38 @@ if [ ! -f "$ARTIFACTS_DIR/yolov8n.onnx" ] || [ ! -f "$ARTIFACTS_DIR/coco.json" ]
     exit 1
 fi
 
+echo "[run_image_yolo] Discovering publisher for: $GZ_TOPIC"
+
+# Get publisher address
+PUBLISHER_ADDRESS=$(gz topic -i -t "$GZ_TOPIC" 2>/dev/null | \
+    grep -oP 'tcp://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | \
+    head -n 1)
+
+if [ -z "$PUBLISHER_ADDRESS" ]; then
+    echo "[run_image_yolo] ERROR: Could not find publisher for topic: $GZ_TOPIC" >&2
+    echo "[run_image_yolo] Troubleshooting:" >&2
+    echo "  1. Check if Gazebo is running" >&2
+    echo "  2. List available topics: gz topic -l" >&2
+    echo "  3. Verify topic has publisher: gz topic -i -t \"$GZ_TOPIC\"" >&2
+    exit 1
+fi
+
+echo "[run_image_yolo] Found publisher: $PUBLISHER_ADDRESS"
+
 # Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
-# Default arguments (can be overridden)
-# Default to sample.mp4 for standalone testing
-USE_GSTREAMER="${USE_GSTREAMER:-false}"
-UDP_PORT="${UDP_PORT:-5600}"
-VIDEO_FILE="${VIDEO_FILE:-$ARTIFACTS_DIR/sample.mp4}"
+# Environment variables (can be overridden)
 ZENOH_MODE="${ZENOH_MODE:-peer}"
 ZENOH_CONNECT="${ZENOH_CONNECT:-}"
 
 echo "=========================================="
-echo "Starting YOLO Host Inference"
+echo "Starting YOLO Inference from Gazebo"
 echo "=========================================="
+echo "Gazebo topic: $GZ_TOPIC"
+echo "Publisher: $PUBLISHER_ADDRESS"
 echo "Model: $ARTIFACTS_DIR/yolov8n.onnx"
 echo "Classes: $ARTIFACTS_DIR/coco.json"
-if [ "$USE_GSTREAMER" = "true" ]; then
-    echo "Input: GStreamer UDP port $UDP_PORT"
-else
-    echo "Input: Video file: $VIDEO_FILE"
-fi
 echo "Zenoh mode: $ZENOH_MODE"
 [ -n "$ZENOH_CONNECT" ] && echo "Zenoh connect: $ZENOH_CONNECT"
 echo ""
@@ -49,42 +79,45 @@ echo "=========================================="
 echo ""
 
 # Build command
-CMD="python3 $SCRIPT_DIR/image_yolo.py \
+CMD="GZ_TRANSPORT_IMPLEMENTATION=zeromq python3 $SCRIPT_DIR/image_yolo.py \
+    --gz-topic \"$GZ_TOPIC\" \
+    --publisher-address \"$PUBLISHER_ADDRESS\" \
     --model $ARTIFACTS_DIR/yolov8n.onnx \
     --classes $ARTIFACTS_DIR/coco.json \
-    --zenoh-mode $ZENOH_MODE \
-    --visualize"
-
-if [ "$USE_GSTREAMER" = "true" ]; then
-    CMD="$CMD --use-gstreamer --udp-port $UDP_PORT"
-else
-    CMD="$CMD --video $VIDEO_FILE"
-fi
+    --zenoh-mode $ZENOH_MODE"
 
 if [ -n "$ZENOH_CONNECT" ]; then
     CMD="$CMD --zenoh-connect $ZENOH_CONNECT"
 fi
 
-# Check if PyAV is available (required for UDP streaming)
+# Add any additional arguments passed to script
+if [ $# -gt 0 ]; then
+    CMD="$CMD $@"
+fi
+
+# Check dependencies
 echo "Checking dependencies..."
-if python3 -c "import av" 2>/dev/null; then
-    PYAV_VERSION=$(python3 -c "import av; print(av.__version__)" 2>/dev/null || echo "unknown")
-    echo "✓ PyAV (av) version: $PYAV_VERSION"
+if python3 -c "import gz_transport_py" 2>/dev/null; then
+    echo "✓ gz-transport-py installed"
 else
-    echo "⚠ WARNING: PyAV (av) is not installed!"
-    echo "  This is required for UDP streaming (USE_GSTREAMER=true)"
-    echo "  Install with: pip install av"
-    if [ "$USE_GSTREAMER" = "true" ]; then
-        echo ""
-        echo "ERROR: Cannot use USE_GSTREAMER=true without PyAV installed"
-        deactivate
-        exit 1
-    fi
+    echo "✗ ERROR: gz-transport-py not installed!"
+    echo "  Install with: cd $PROJECT_DIR && pip install -e ."
+    deactivate
+    exit 1
+fi
+
+if python3 -c "from gz.msgs import image_pb2" 2>/dev/null; then
+    echo "✓ gz-msgs-py installed"
+else
+    echo "✗ ERROR: gz-msgs-py not installed!"
+    echo "  Install with: cd $(dirname $PROJECT_DIR)/gz-msgs-py && pip install -e ."
+    deactivate
+    exit 1
 fi
 echo ""
 
 # Run YOLO
-$CMD
+eval $CMD
 
 deactivate
 

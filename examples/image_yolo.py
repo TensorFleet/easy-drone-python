@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Standalone YOLOv8 ONNX inference node.
+Reads images directly from Gazebo via ZMQ (gz-transport).
 Publishes detections over Zenoh as CDR-serialized vision_msgs/Detection2DArray.
 """
 import argparse
@@ -8,16 +9,29 @@ import json
 import os
 import platform
 import queue
+import signal
 import struct
+import sys
 import threading
 import time
 from typing import Optional, Tuple
 
-import av
 import cv2
 import numpy as np
 import onnxruntime as ort
 import zenoh
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+try:
+    from gz_transport_py import Node
+    from gz.msgs.image_pb2 import Image
+except Exception as e:
+    print("[YOLO] ERROR: gz-transport-py or gz-msgs not available.")
+    print("Install gz-transport-py: cd gz-transport-py && pip install -e .")
+    print("Install gz-msgs: cd gz-msgs-py && pip install -e .")
+    raise
 
 
 def convert_xywh_to_xyxy(xywh_array: np.ndarray) -> np.ndarray:
@@ -132,9 +146,7 @@ class YoloPublisher:
     
     def __init__(self, args: argparse.Namespace):
         self.architecture = platform.machine()
-        self.input_is_gstreamer = args.use_gstreamer
-        self.udp_port = args.udp_port
-        self.video_path = args.video
+        self.gz_topic = args.gz_topic
         self.model_path = args.model
         self.classes_path = args.classes
         self.input_size = args.input_size
@@ -159,22 +171,15 @@ class YoloPublisher:
         self.input_name = self.session.get_inputs()[0].name
         print(f"[YOLO] Execution providers: {self.session.get_providers()}")
         
-        # Open video capture with retry logic
+        # Frame queue for processing
         self.frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2)
-        self._is_running = threading.Event()
-        self._is_running.set()
-        self._capture: Optional[cv2.VideoCapture] = None
-        self._av_container: Optional[av.container.InputContainer] = None
-        self._open_video_capture()
+        self._frame_count = 0
+        self._last_frame_time = time.time()
         
         # Create visualization window if needed
         if self.visualize:
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(self.window_name, 800, 600)
-        
-        # Start frame capture thread
-        self._capture_thread = threading.Thread(target=self._frame_reader_loop, daemon=True)
-        self._capture_thread.start()
         
         # Initialize Zenoh session
         zenoh_config = zenoh.Config()
@@ -188,7 +193,70 @@ class YoloPublisher:
             encoding=zenoh.Encoding.ZENOH_BYTES
         )
         print(f"[YOLO] Zenoh publisher ready on topic: {self.zenoh_topic}")
+        
+        # Respect GZ_PARTITION if set for discovery
+        partition = os.getenv('GZ_PARTITION')
+        if partition:
+            print(f"[YOLO] Using GZ_PARTITION={partition}")
+        
+        # Create gz-transport node
+        self.gz_node = Node(verbose=True)
+        
+        # Get manual publisher address if specified
+        publisher_addr = args.publisher_address or os.getenv('GZ_PUBLISHER_ADDRESS')
+        
+        # Subscribe to Gazebo image topic
+        ok = self.gz_node.subscribe(
+            Image,
+            self.gz_topic,
+            self._on_gz_image,
+            publisher_address=publisher_addr
+        )
+        if not ok:
+            raise RuntimeError(f"Failed to subscribe to Gazebo topic: {self.gz_topic}")
+        
+        print(f"[YOLO] Subscribed to Gazebo topic: {self.gz_topic}")
+        if publisher_addr:
+            print(f"[YOLO] Direct connection to: {publisher_addr}")
         print("[YOLO] YOLO inference started.")
+    
+    def _on_gz_image(self, msg: Image) -> None:
+        """Callback for Gazebo image messages."""
+        try:
+            # Convert Gazebo Image message to numpy array
+            # Gazebo images are typically RGB format
+            if msg.pixel_format_type == Image.RGB_INT8:
+                # RGB8 format
+                img_array = np.frombuffer(msg.data, dtype=np.uint8)
+                img_array = img_array.reshape((msg.height, msg.width, 3))
+                # Convert RGB to BGR for OpenCV
+                frame = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            elif msg.pixel_format_type == Image.BGR_INT8:
+                # Already BGR
+                img_array = np.frombuffer(msg.data, dtype=np.uint8)
+                frame = img_array.reshape((msg.height, msg.width, 3))
+            else:
+                print(f"[YOLO] WARNING: Unsupported pixel format: {msg.pixel_format_type}")
+                return
+            
+            # Try to add to queue (non-blocking)
+            try:
+                self.frame_queue.put(frame, block=False)
+                self._frame_count += 1
+                
+                # Print frame rate stats every 120 frames
+                if self._frame_count % 120 == 0:
+                    now = time.time()
+                    elapsed = now - self._last_frame_time
+                    fps = 120 / elapsed if elapsed > 0 else 0
+                    print(f"[YOLO] Frame Reception Rate: {fps:.2f} FPS")
+                    self._last_frame_time = now
+            except queue.Full:
+                # Queue is full, drop frame (inference is slower than input)
+                pass
+                
+        except Exception as e:
+            print(f"[YOLO] ERROR processing Gazebo image: {e}")
     
     def _create_onnx_session(self, model_path: str) -> ort.InferenceSession:
         """Create ONNX Runtime session with appropriate execution provider."""
@@ -208,236 +276,16 @@ class YoloPublisher:
             providers = ["CPUExecutionProvider"]
         return ort.InferenceSession(model_path, providers=providers)
     
-    def _open_video_capture(self) -> None:
-        """Open video capture (PyAV for UDP or OpenCV for file) with retry logic."""
-        if self.input_is_gstreamer:
-            # Use PyAV for UDP H264 streams (much more reliable than OpenCV+GStreamer)
-            url = f"udp://127.0.0.1:{self.udp_port}"
-            print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
-            print(f"[YOLO] Stream URL: {url}")
-            print(f"[YOLO] Waiting for UDP data...")
-            
-            # Try to open with retries
-            max_retries = 3
-            for attempt in range(max_retries):
-                container_result = [None]
-                exception_result = [None]
-                
-                def open_container():
-                    """Thread function to open container with timeout."""
-                    # Try multiple approaches to open the UDP stream
-                    attempts = [
-                        # Attempt 1: Auto-detect format with minimal buffering
-                        (url, None, {
-                            'buffer_size': '1024000',
-                            'fifo_size': '1000000',
-                            'overrun_nonfatal': '1',
-                        }),
-                        # Attempt 2: Specify mpegts format (common for UDP streams)
-                        (url, 'mpegts', {
-                            'fflags': 'nobuffer',
-                        }),
-                        # Attempt 3: Specify h264 format
-                        (url, 'h264', {
-                            'fflags': 'nobuffer',
-                        }),
-                        # Attempt 4: Let PyAV auto-detect everything
-                        (url, None, {}),
-                    ]
-                    
-                    last_error = None
-                    for stream_url, fmt, opts in attempts:
-                        try:
-                            if fmt:
-                                container = av.open(stream_url, format=fmt, options=opts)
-                            else:
-                                container = av.open(stream_url, options=opts)
-                            container_result[0] = container
-                            return
-                        except Exception as e:
-                            last_error = e
-                            continue
-                    
-                    exception_result[0] = last_error
-                
-                # Run in thread with timeout
-                thread = threading.Thread(target=open_container, daemon=True)
-                thread.start()
-                thread.join(timeout=10.0)  # 10 second timeout for the entire open operation
-                
-                if thread.is_alive():
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream (10s)")
-                    if attempt < max_retries - 1:
-                        print(f"[YOLO] Retrying in 2s...")
-                        time.sleep(2)
-                    continue
-                
-                if exception_result[0]:
-                    error_msg = str(exception_result[0])
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
-                    if "Immediate exit requested" in error_msg:
-                        print(f"[YOLO] Hint: The stream format might not be auto-detectable")
-                        print(f"[YOLO] Run this to check stream format:")
-                        print(f"[YOLO]   ffprobe udp://127.0.0.1:{self.udp_port}")
-                    if attempt < max_retries - 1:
-                        print(f"[YOLO] Retrying in 2s...")
-                        time.sleep(2)
-                    continue
-                
-                if container_result[0]:
-                    try:
-                        # Test if we can get a stream
-                        if container_result[0].streams.video:
-                            print(f"[YOLO] UDP stream opened successfully using PyAV!")
-                            print(f"[YOLO] Video codec: {container_result[0].streams.video[0].codec_context.name}")
-                            self._av_container = container_result[0]
-                            return
-                        else:
-                            print(f"[YOLO] No video stream found in container")
-                            container_result[0].close()
-                    except Exception as e:
-                        print(f"[YOLO] Error inspecting container: {e}")
-                        if attempt < max_retries - 1:
-                            print(f"[YOLO] Retrying in 2s...")
-                            time.sleep(2)
-            
-            print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
-            print("\n[YOLO] Common causes:")
-            print(f"  - No video stream is being sent to port {self.udp_port}")
-            print(f"  - Video source (drone, simulator, etc.) is not running")
-            print(f"  - Firewall blocking UDP port {self.udp_port}")
-            print(f"  - Wrong port number (check video source configuration)")
-            print("\n[YOLO] Troubleshooting steps:")
-            print(f"  1. Verify video source is running and sending UDP stream")
-            print(f"")
-            print(f"  2. Test if UDP packets are arriving:")
-            print(f"     sudo tcpdump -i lo udp port {self.udp_port} -c 10")
-            print(f"     (Install with: sudo apt-get install tcpdump)")
-            print(f"     Should show packets if stream is active")
-            print(f"")
-            print(f"  3. Test stream with ffplay:")
-            print(f"     ffplay -fflags nobuffer -flags low_delay udp://127.0.0.1:{self.udp_port}")
-            print(f"     (Install with: sudo apt-get install ffmpeg)")
-            print(f"")
-            print(f"  4. Test with GStreamer:")
-            print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
-            print(f"     (Should show 'chain' messages if receiving data)")
-            print(f"")
-            print(f"  5. Check network statistics:")
-            print(f"     netstat -su | grep -i udp")
-            print(f"     (Look for UDP receive errors or dropped packets)")
-            raise RuntimeError("Failed to open UDP video source")
-        else:
-            # Use OpenCV for video files
-            cap = cv2.VideoCapture(self.video_path)
-            if not cap.isOpened():
-                print(f"\n[YOLO] ERROR: Failed to open video file: {self.video_path}")
-                print("\n[YOLO] Troubleshooting steps:")
-                print(f"  1. Verify the file exists:")
-                print(f"     ls -lh {self.video_path}")
-                print(f"")
-                print(f"  2. Check file format and codec:")
-                print(f"     ffprobe -v error -show_format -show_streams {self.video_path}")
-                print(f"     (Install with: sudo apt-get install ffmpeg)")
-                print(f"")
-                print(f"  3. Try playing with ffplay:")
-                print(f"     ffplay {self.video_path}")
-                raise RuntimeError(f"Failed to open video file: {self.video_path}")
-            print(f"[YOLO] Video file opened successfully: {self.video_path}")
-            self._capture = cap
-    
-    def _frame_reader_loop(self) -> None:
-        """Background thread to continuously read frames."""
-        frames_received = 0
-        start_time = time.time()
-        consecutive_failures = 0
-        MAX_FAILURES = 30  # ~3 seconds at 10ms sleep
-        
-        while self._is_running.is_set():
-            frame = None
-            ok = False
-            
-            try:
-                if self.input_is_gstreamer:
-                    # PyAV-based UDP stream reading
-                    if self._av_container is None:
-                        time.sleep(0.01)
-                        continue
-                    
-                    try:
-                        for packet in self._av_container.demux(video=0):
-                            for av_frame in packet.decode():
-                                # Convert PyAV frame to numpy array (BGR format for OpenCV compatibility)
-                                frame = av_frame.to_ndarray(format='bgr24')
-                                ok = True
-                                break
-                            if ok:
-                                break
-                    except av.error.EOFError:
-                        print("[YOLO] Stream ended (EOF)")
-                        ok = False
-                    except Exception as e:
-                        print(f"[YOLO] Error reading from PyAV stream: {e}")
-                        ok = False
-                else:
-                    # OpenCV-based file reading
-                    if self._capture is None:
-                        time.sleep(0.01)
-                        continue
-                    ok, frame = self._capture.read()
-                
-                if not ok or frame is None:
-                    if not self.input_is_gstreamer:
-                        # Video file ended, loop back to start
-                        if self._capture is not None:
-                            self._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                            print("[YOLO] Video file ended, looping...")
-                        time.sleep(0.01)
-                        continue
-
-                    # UDP stream: track failures and attempt reconnection
-                    consecutive_failures += 1
-                    if consecutive_failures > MAX_FAILURES:
-                        print("[YOLO] Stream lost, attempting reconnection...")
-                        try:
-                            # Release current container and try to reopen
-                            if self._av_container is not None:
-                                self._av_container.close()
-                                self._av_container = None
-                        except Exception:
-                            pass
-                        try:
-                            self._open_video_capture()
-                            consecutive_failures = 0
-                            print("[YOLO] Reconnected successfully!")
-                        except Exception as e:
-                            print(f"[YOLO] ERROR: Reconnection failed: {e}")
-                            print("\n[YOLO] Troubleshooting steps:")
-                            print(f"  1. Check if stream is still available:")
-                            print(f"     ffplay udp://127.0.0.1:{self.udp_port}")
-                            print(f"")
-                            print(f"  2. Check system logs for network issues:")
-                            print(f"     dmesg | tail -n 50")
-                    time.sleep(0.01)
-                    continue
-                
-                # Reset on successful read
-                consecutive_failures = 0
-                try:
-                    self.frame_queue.put(frame, timeout=0.05)
-                    frames_received += 1
-                except queue.Full:
-                    pass
-                if frames_received and frames_received % 120 == 0:
-                    elapsed = time.time() - start_time
-                    fps = frames_received / elapsed if elapsed > 0 else 0.0
-                    print(f"[YOLO] Frame Reception Rate: {fps:.2f} FPS")
-                    frames_received = 0
-                    start_time = time.time()
-                    
-            except Exception as e:
-                print(f"[YOLO] Unexpected error in frame reader loop: {e}")
-                time.sleep(0.01)
+    def _watchdog_check(self) -> None:
+        """Check if frames are being received and warn if not."""
+        if self._frame_count == 0:
+            print("[YOLO] WARNING: No frames received from Gazebo yet.")
+            print("  Troubleshooting:")
+            print(f"   - Verify publisher visible: gz topic -i -t {self.gz_topic}")
+            print(f"   - Echo messages: gz topic -e -t {self.gz_topic}")
+            print("   - Partitions: export GZ_PARTITION to match simulator if set")
+            print("   - Check that Gazebo and this script run under same user env")
+            print("   - Ensure gz-transport-py is properly installed")
     
     def _preprocess(self, bgr_frame: np.ndarray) -> np.ndarray:
         """Preprocess frame for YOLO inference."""
@@ -513,21 +361,30 @@ class YoloPublisher:
         """Main inference loop."""
         inferences = 0
         start_time = time.time()
+        
+        # Set up signal handlers
+        def _stop_handler(_sig, _frm):
+            print("\n[YOLO] Shutting down...")
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, _stop_handler)
+        signal.signal(signal.SIGTERM, _stop_handler)
+        
+        # Schedule watchdog check
+        watchdog_timer = threading.Timer(5.0, self._watchdog_check)
+        watchdog_timer.daemon = True
+        watchdog_timer.start()
+        
         try:
             while True:
                 try:
                     frame = self.frame_queue.get(timeout=1.0)
                 except queue.Empty:
                     print('[YOLO] WARNING: Frame queue empty - no frames received in 1 second')
-                    if self.input_is_gstreamer:
-                        print('[YOLO] Troubleshooting steps:')
-                        print(f'  1. Verify stream is active:')
-                        print(f'     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true')
-                    else:
-                        print(f'[YOLO] Troubleshooting steps:')
-                        print(f'  1. Check video file is accessible:')
-                        print(f'     ls -lh {self.video_path}')
-                        print(f'  2. Check frame reader thread status')
+                    print('[YOLO] Troubleshooting steps:')
+                    print(f'  1. Verify topic is active: gz topic -i -t {self.gz_topic}')
+                    print(f'  2. Echo messages: gz topic -e -t {self.gz_topic}')
+                    print(f'  3. Check GZ_PARTITION environment variable')
                     continue
                 
                 h0, w0 = frame.shape[:2]
@@ -556,15 +413,10 @@ class YoloPublisher:
         except KeyboardInterrupt:
             print("\n[YOLO] Shutting down...")
         finally:
-            self._is_running.clear()
-            self._capture_thread.join(timeout=1.0)
-            if self._capture is not None:
-                self._capture.release()
-            if self._av_container is not None:
-                self._av_container.close()
             if self.visualize:
                 cv2.destroyAllWindows()
             self.zenoh_session.close()
+            self.gz_node.shutdown()
     
     def _draw_detections(
         self, frame: np.ndarray, boxes: np.ndarray, scores: np.ndarray, classes: np.ndarray
@@ -584,20 +436,19 @@ class YoloPublisher:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Standalone YOLOv8 ONNX inference with Zenoh publishing'
+        description='YOLOv8 ONNX inference from Gazebo images with Zenoh publishing'
     )
-    parser.add_argument('--model', type=str, default='yolov8n.onnx', help='Path to ONNX model')
-    parser.add_argument('--classes', type=str, default='coco.json', help='Path to COCO classes JSON')
+    parser.add_argument('--gz-topic', required=True, help='Gazebo image topic (e.g., /camera)')
+    parser.add_argument('--model', type=str, required=True, help='Path to ONNX model')
+    parser.add_argument('--classes', type=str, required=True, help='Path to COCO classes JSON')
     parser.add_argument('--input-size', type=int, default=640, help='Model input size')
     parser.add_argument('--conf-threshold', type=float, default=0.5, help='Confidence threshold')
     parser.add_argument('--nms-threshold', type=float, default=0.45, help='NMS threshold')
-    parser.add_argument('--use-gstreamer', action='store_true', help='Use GStreamer UDP H264')
-    parser.add_argument('--udp-port', type=int, default=5600, help='UDP port for GStreamer')
-    parser.add_argument('--video', type=str, default='sample.mp4', help='Video file (if not GStreamer)')
     parser.add_argument('--zenoh-topic', type=str, default='rt/detections', help='Zenoh topic for detections')
     parser.add_argument('--zenoh-mode', type=str, default='peer', help='Zenoh mode: peer or client')
     parser.add_argument('--zenoh-connect', type=str, default='', help='Zenoh router endpoint (e.g., tcp/42.42.1.1:7447)')
     parser.add_argument('--visualize', action='store_true', help='Show visualization window with detections')
+    parser.add_argument('--publisher-address', help='Direct publisher address (bypasses discovery). Format: tcp://host:port')
     return parser.parse_args()
 
 

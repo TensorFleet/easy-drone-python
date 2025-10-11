@@ -3,7 +3,7 @@ protobuf>=4.21.0
 eclipse-zenoh
 
 # YOLO inference dependencies (for image_yolo.py example)
-av>=10.0.0  # PyAV for UDP video streaming (replaces OpenCV+GStreamer)
+# Works with standard pip-installed OpenCV (no special compilation needed!)
 opencv-python>=4.5.0
 numpy>=1.21.0
 onnxruntime>=1.12.0
