@@ -100,9 +100,19 @@ class Subscriber:
                         
                         # Check if this message is for our subscribed topic
                         # The topic must match or be a substring match
-                        if self.topic not in actual_topic and actual_topic not in self.topic:
+                        topic_match = self.topic in actual_topic or actual_topic in self.topic
+                        
+                        if not topic_match:
                             # Skip messages not for this topic
                             continue
+                        else:
+                            # Debug: Show when we match the desired topic
+                            if not hasattr(self, '_matched_count'):
+                                self._matched_count = 0
+                            self._matched_count += 1
+                            if self._matched_count <= 3:
+                                print(f"[Subscriber] ✓ MATCHED topic (#{self._matched_count}): {actual_topic[:60]}...")
+                                print(f"[Subscriber]   Data size: {len(parts[2]) if len(parts) >= 3 else 0} bytes")
                             
                     except:
                         pass  # If we can't decode topic, try to process anyway
@@ -128,6 +138,14 @@ class Subscriber:
                     try:
                         msg = self.msg_type()
                         msg.ParseFromString(msg_bytes)
+                        
+                        # Debug: Show successful parse
+                        if not hasattr(self, '_parse_success_count'):
+                            self._parse_success_count = 0
+                        self._parse_success_count += 1
+                        if self._parse_success_count <= 3:
+                            print(f"[Subscriber] ✓ PARSED message #{self._parse_success_count} successfully")
+                        
                         self.callback(msg)
                     except Exception as e:
                         # If parsing failed and we have multiple parts, try other parts
