@@ -212,44 +212,94 @@ class YoloPublisher:
         """Open video capture (PyAV for UDP or OpenCV for file) with retry logic."""
         if self.input_is_gstreamer:
             # Use PyAV for UDP H264 streams (much more reliable than OpenCV+GStreamer)
-            url = f"udp://127.0.0.1:{self.udp_port}?fifo_size=1000000&overrun_nonfatal=1"
+            url = f"udp://127.0.0.1:{self.udp_port}"
             print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
             print(f"[YOLO] Stream URL: {url}")
-            print(f"[YOLO] Waiting for UDP data (this will timeout if no stream is available)...")
+            print(f"[YOLO] Waiting for UDP data...")
             
             # Try to open with retries
             max_retries = 3
             for attempt in range(max_retries):
-                try:
-                    # FFmpeg options to prevent hanging and add timeout
-                    container = av.open(url, options={
-                        'timeout': '5000000',  # 5 second timeout in microseconds
-                        'max_delay': '500000',  # 0.5 second max delay
-                        'fflags': 'nobuffer',  # Minimize buffering
-                        'flags': 'low_delay',  # Low latency mode
-                        'analyzeduration': '1000000',  # 1 second to analyze stream
-                        'probesize': '1000000',  # 1MB probe size
-                    }, timeout=5.0)  # PyAV timeout in seconds
+                container_result = [None]
+                exception_result = [None]
+                
+                def open_container():
+                    """Thread function to open container with timeout."""
+                    # Try multiple approaches to open the UDP stream
+                    attempts = [
+                        # Attempt 1: Auto-detect format with minimal buffering
+                        (url, None, {
+                            'buffer_size': '1024000',
+                            'fifo_size': '1000000',
+                            'overrun_nonfatal': '1',
+                        }),
+                        # Attempt 2: Specify mpegts format (common for UDP streams)
+                        (url, 'mpegts', {
+                            'fflags': 'nobuffer',
+                        }),
+                        # Attempt 3: Specify h264 format
+                        (url, 'h264', {
+                            'fflags': 'nobuffer',
+                        }),
+                        # Attempt 4: Let PyAV auto-detect everything
+                        (url, None, {}),
+                    ]
                     
-                    # Test if we can get a stream
-                    if container.streams.video:
-                        print(f"[YOLO] UDP stream opened successfully using PyAV!")
-                        print(f"[YOLO] Video codec: {container.streams.video[0].codec_context.name}")
-                        self._av_container = container
-                        return
-                    else:
-                        print(f"[YOLO] No video stream found in container")
-                        container.close()
-                except av.error.TimeoutError:
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream")
+                    last_error = None
+                    for stream_url, fmt, opts in attempts:
+                        try:
+                            if fmt:
+                                container = av.open(stream_url, format=fmt, options=opts)
+                            else:
+                                container = av.open(stream_url, options=opts)
+                            container_result[0] = container
+                            return
+                        except Exception as e:
+                            last_error = e
+                            continue
+                    
+                    exception_result[0] = last_error
+                
+                # Run in thread with timeout
+                thread = threading.Thread(target=open_container, daemon=True)
+                thread.start()
+                thread.join(timeout=10.0)  # 10 second timeout for the entire open operation
+                
+                if thread.is_alive():
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream (10s)")
                     if attempt < max_retries - 1:
                         print(f"[YOLO] Retrying in 2s...")
                         time.sleep(2)
-                except Exception as e:
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {e}")
+                    continue
+                
+                if exception_result[0]:
+                    error_msg = str(exception_result[0])
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+                    if "Immediate exit requested" in error_msg:
+                        print(f"[YOLO] Hint: The stream format might not be auto-detectable")
+                        print(f"[YOLO] Run this to check stream format:")
+                        print(f"[YOLO]   ffprobe udp://127.0.0.1:{self.udp_port}")
                     if attempt < max_retries - 1:
                         print(f"[YOLO] Retrying in 2s...")
                         time.sleep(2)
+                    continue
+                
+                if container_result[0]:
+                    try:
+                        # Test if we can get a stream
+                        if container_result[0].streams.video:
+                            print(f"[YOLO] UDP stream opened successfully using PyAV!")
+                            print(f"[YOLO] Video codec: {container_result[0].streams.video[0].codec_context.name}")
+                            self._av_container = container_result[0]
+                            return
+                        else:
+                            print(f"[YOLO] No video stream found in container")
+                            container_result[0].close()
+                    except Exception as e:
+                        print(f"[YOLO] Error inspecting container: {e}")
+                        if attempt < max_retries - 1:
+                            print(f"[YOLO] Retrying in 2s...")
+                            time.sleep(2)
             
             print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
             print("\n[YOLO] Common causes:")
