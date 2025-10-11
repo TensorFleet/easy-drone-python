@@ -5,6 +5,8 @@ Gazebo → GStreamer video bridge
 Subscribes to a Gazebo Harmonic image topic (gz-transport) and pushes raw RGB
 frames into a GStreamer pipeline that encodes to H.264 and streams via UDP.
 
+Sends raw H.264 stream (no RTP encapsulation) for simpler decoding.
+
 Defaults to software x264 encoder, auto-switches to NVENC if available.
 
 This version uses gz-transport-py (custom Python library).
@@ -80,11 +82,12 @@ class GzToGStreamerBridge:
         )
 
         # Note: caps set dynamically on first frame since width/height are unknown
+        # Sending raw H.264 over UDP (no RTP encapsulation)
         pipeline = (
             "appsrc name=py_source format=time is-live=true do-timestamp=true ! "
             "videoconvert ! "
             f"{encoder}"
-            "rtph264pay config-interval=1 pt=96 ! "
+            "h264parse ! "  # Parse H.264 stream for proper framing
             f"udpsink host={self.udp_host} port={self.udp_port}"
         )
         return pipeline
@@ -118,8 +121,9 @@ class GzToGStreamerBridge:
 
     def run(self) -> None:
         self.pipeline.set_state(Gst.State.PLAYING)
-        print(f"[gz_video_bridge] Streaming to udp://{self.udp_host}:{self.udp_port}")
+        print(f"[gz_video_bridge] Streaming raw H.264 to udp://{self.udp_host}:{self.udp_port}")
         print(f"[gz_video_bridge] Subscribed: {self.gz_topic}")
+        print(f"[gz_video_bridge] Note: Sending raw H.264, not RTP (no rtph264pay)")
 
         # Watchdog: warn if no frames for N seconds
         def _watchdog():
@@ -154,7 +158,7 @@ class GzToGStreamerBridge:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Gazebo → GStreamer UDP H.264 bridge')
+    parser = argparse.ArgumentParser(description='Gazebo → GStreamer UDP H.264 bridge (raw H.264, no RTP)')
     parser.add_argument('--gz-topic', default='/camera', help='Gazebo image topic')
     parser.add_argument('--ip', default=os.getenv('GSTREAMER_UDP_HOST', '127.0.0.1'), help='Destination IP')
     parser.add_argument('--port', type=int, default=int(os.getenv('GSTREAMER_UDP_PORT', '5600')), help='Destination UDP port')
