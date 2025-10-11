@@ -89,6 +89,15 @@ class Subscriber:
                         else:
                             actual_topic = topic_with_prefix
                         
+                        # Debug: Print first few topics received
+                        if not hasattr(self, '_topics_seen'):
+                            self._topics_seen = set()
+                        if actual_topic not in self._topics_seen and len(self._topics_seen) < 5:
+                            self._topics_seen.add(actual_topic)
+                            print(f"[Subscriber] Received topic: {actual_topic[:80]}")
+                            print(f"[Subscriber] Subscribed to: {self.topic[:80]}")
+                            print(f"[Subscriber] Match: {self.topic in actual_topic or actual_topic in self.topic}")
+                        
                         # Check if this message is for our subscribed topic
                         # The topic must match or be a substring match
                         if self.topic not in actual_topic and actual_topic not in self.topic:
@@ -400,7 +409,14 @@ class Node:
             
             # Create ZeroMQ SUB socket
             socket = self.context.socket(zmq.SUB)
-            socket.setsockopt_string(zmq.SUBSCRIBE, full_topic)
+            
+            # C++ gz-transport uses partition prefix: @hostname:user@topic
+            # We need to subscribe with @ to receive partitioned messages
+            # This will receive all messages, but we filter in software
+            socket.setsockopt(zmq.SUBSCRIBE, b"@")  # Subscribe to partitioned messages
+            
+            if self.verbose:
+                print(f"[Node] ZMQ subscription filter: '@' (all partitioned topics, will filter to {full_topic})")
             
             # Create subscriber
             subscriber = Subscriber(full_topic, callback, msg_type, socket)
