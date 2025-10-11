@@ -5,8 +5,10 @@ A pure Python implementation of Gazebo Transport (gz-transport) providing pub/su
 ## Features
 
 ✅ **Pub/Sub Messaging** - Publish and subscribe to topics
-✅ **Automatic Discovery** - UDP multicast discovery of publishers/subscribers  
-✅ **ZeroMQ Transport** - Fast message delivery using ZeroMQ
+✅ **Automatic Discovery** - UDP multicast (ZeroMQ) or liveliness tokens (Zenoh)
+✅ **Multiple Backends** - Choose between ZeroMQ or Zenoh transport
+✅ **ZeroMQ Transport** - Fast message delivery using ZeroMQ (default)
+✅ **Zenoh Transport** - Alternative backend using Zenoh pub/sub
 ✅ **Protobuf Messages** - Compatible with Protocol Buffer messages
 ✅ **No C++ Dependencies** - Pure Python, no need to compile gz-transport
 ✅ **Network Communication** - Works across processes and machines
@@ -17,6 +19,14 @@ A pure Python implementation of Gazebo Transport (gz-transport) providing pub/su
 
 ```bash
 pip install pyzmq protobuf
+```
+
+### Optional: Zenoh Backend
+
+To use the Zenoh transport backend:
+
+```bash
+pip install eclipse-zenoh
 ```
 
 ### Optional: Gazebo Messages
@@ -73,9 +83,17 @@ while True:
 
 See the `examples/` directory for complete examples:
 
+**ZeroMQ Backend (default):**
+
 - `simple_publisher.py` - Basic publisher
 - `simple_subscriber.py` - Basic subscriber
 - `topic_list.py` - List all available topics
+
+**Zenoh Backend:**
+
+- `zenoh_publisher.py` - Zenoh-based publisher
+- `zenoh_subscriber.py` - Zenoh-based subscriber
+- `zenoh_cross_backend.py` - Demonstrates backend isolation
 
 ### Running Examples
 
@@ -210,16 +228,39 @@ Once discovered, actual messages are sent via ZeroMQ:
          └───────────────────────┘
 ```
 
+## Backend Selection
+
+This library supports two transport backends, matching the C++ implementation:
+
+### ZeroMQ (Default)
+
+```bash
+# Use ZeroMQ (default, no env var needed)
+export GZ_TRANSPORT_IMPLEMENTATION=zeromq
+python3 your_script.py
+```
+
+### Zenoh
+
+```bash
+# Use Zenoh backend
+export GZ_TRANSPORT_IMPLEMENTATION=zenoh
+python3 your_script.py
+```
+
+**Important:** All communicating nodes must use the same backend. ZeroMQ and Zenoh nodes cannot communicate with each other.
+
 ## Comparison with C++ gz-transport
 
 | Feature            | Pure Python | C++ gz-transport |
 | ------------------ | ----------- | ---------------- |
 | Pub/Sub            | ✅          | ✅               |
 | Discovery          | ✅          | ✅               |
+| ZeroMQ Backend     | ✅          | ✅               |
+| Zenoh Backend      | ✅          | ✅               |
 | Services (Req/Rep) | ❌ (TODO)   | ✅               |
 | Logging            | ❌ (TODO)   | ✅               |
 | Statistics         | ❌ (TODO)   | ✅               |
-| Zenoh Support      | ❌          | ✅               |
 | Performance        | Good        | Excellent        |
 | Dependencies       | Python only | C++, deps        |
 
@@ -233,7 +274,8 @@ Once discovered, actual messages are sent via ZeroMQ:
 
 Environment variables:
 
-- `GZ_IP` - Set specific IP address for multicast
+- `GZ_TRANSPORT_IMPLEMENTATION` - Set transport backend: `zeromq` or `zenoh` (default: zeromq)
+- `GZ_IP` - Set specific IP address for multicast (ZeroMQ only)
 - `GZ_RELAY` - Set relay addresses (not yet implemented)
 - `GZ_PARTITION` - Default partition name
 

@@ -103,6 +103,7 @@ gz-transport-py/
 
 **Optional:**
 
+- `zenoh` - Zenoh Python bindings (for Zenoh backend)
 - `gz-msgs` - For compatibility with C++ gz-transport
 
 ## Installation
@@ -217,7 +218,6 @@ The implementation is compatible with gz-transport version 12-15, with these dif
 ❌ **Services** - Request/response pattern
 ❌ **Logging** - Record/playback functionality
 ❌ **Statistics** - Bandwidth/latency monitoring
-❌ **Zenoh** - Alternative transport backend
 ❌ **Relay** - Unicast relay for restricted networks
 ❌ **Throttling** - Message rate limiting (structure exists, not enforced)
 
@@ -266,6 +266,20 @@ python3 test_simple.py
 - Logging/playback needs
 - Production systems with C++ code
 
+## Backend Support
+
+✅ **ZeroMQ** - Default backend, full UDP multicast discovery
+✅ **Zenoh** - Alternative backend, uses Zenoh's discovery via liveliness tokens
+
+To select the backend, set the environment variable:
+
+```bash
+export GZ_TRANSPORT_IMPLEMENTATION=zenoh  # Use Zenoh
+export GZ_TRANSPORT_IMPLEMENTATION=zeromq # Use ZeroMQ (default)
+```
+
+**Note:** ZeroMQ and Zenoh backends cannot communicate with each other - all nodes must use the same backend.
+
 ## Future Enhancements
 
 **Priority 1:**
@@ -279,10 +293,10 @@ python3 test_simple.py
 - [ ] Logging (record/playback)
 - [ ] Statistics collection
 - [ ] Binary discovery messages (protobuf)
+- [ ] Zenoh services (REQ/REP using Zenoh queryables)
 
 **Priority 3:**
 
-- [ ] Zenoh support
 - [ ] Async/await API
 - [ ] C extensions for performance
 - [ ] Better test coverage
