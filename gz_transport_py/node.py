@@ -52,25 +52,67 @@ class Subscriber:
                 # Receive multipart message
                 parts = self.socket.recv_multipart()
                 
+                # C++ gz-transport uses 4-part messages:
+                # Part 0: Partition+Topic (e.g., "@/hostname:user@/topic")
+                # Part 1: Publisher address
+                # Part 2: Protobuf serialized data (THE MESSAGE)
+                # Part 3: Message type name
+                
                 # Debug: Print message structure once
                 if not debug_printed:
-                    print(f"[Subscriber] Received message with {len(parts)} parts")
-                    for i, part in enumerate(parts[:3]):  # First 3 parts only
-                        print(f"[Subscriber]   Part {i}: {len(part)} bytes")
+                    print(f"[Subscriber] Message format: {len(parts)} parts")
+                    if len(parts) >= 1:
+                        try:
+                            part0_text = parts[0].decode('utf-8', errors='ignore')
+                            print(f"[Subscriber]   Part 0 (topic): {part0_text[:60]}")
+                        except:
+                            pass
+                    if len(parts) >= 3:
+                        print(f"[Subscriber]   Part 2 (data): {len(parts[2])} bytes")
+                    if len(parts) >= 4:
+                        try:
+                            part3_text = parts[3].decode('utf-8', errors='ignore')
+                            print(f"[Subscriber]   Part 3 (type): {part3_text}")
+                        except:
+                            pass
                     debug_printed = True
                 
-                # Try different parsing strategies based on number of parts
+                # Filter by topic (Part 0 contains the topic, possibly with partition prefix)
+                if len(parts) >= 1:
+                    try:
+                        topic_with_prefix = parts[0].decode('utf-8')
+                        # Remove partition prefix if present (@partition@topic -> topic)
+                        if '@' in topic_with_prefix:
+                            # Format: @partition@topic or @host:user@topic
+                            topic_parts = topic_with_prefix.split('@')
+                            actual_topic = topic_parts[-1] if len(topic_parts) > 1 else topic_with_prefix
+                        else:
+                            actual_topic = topic_with_prefix
+                        
+                        # Check if this message is for our subscribed topic
+                        # The topic must match or be a substring match
+                        if self.topic not in actual_topic and actual_topic not in self.topic:
+                            # Skip messages not for this topic
+                            continue
+                            
+                    except:
+                        pass  # If we can't decode topic, try to process anyway
+                
+                # Determine which part contains the message data
                 msg_bytes = None
                 
-                if len(parts) == 1:
-                    # Single part - just the message data
+                if len(parts) == 4:
+                    # Standard C++ gz-transport format: use Part 2
+                    msg_bytes = parts[2]
+                elif len(parts) == 2:
+                    # Simple format: [topic, data]
+                    msg_bytes = parts[1]
+                elif len(parts) == 1:
+                    # Single part: just data
                     msg_bytes = parts[0]
-                elif len(parts) >= 2:
-                    # Multi-part: Could be [topic, data] or [header, topic, data] or other formats
-                    # Try the last part first (most likely to be the actual message)
-                    msg_bytes = parts[-1]
-                    
-                    # If that fails, we'll try parts[1] in the exception handler
+                elif len(parts) >= 3:
+                    # Try part 2 first (most common), then part 1
+                    msg_bytes = parts[2]
                 
                 if msg_bytes:
                     # Deserialize and call callback
@@ -79,17 +121,25 @@ class Subscriber:
                         msg.ParseFromString(msg_bytes)
                         self.callback(msg)
                     except Exception as e:
-                        # If parsing last part failed and we have multiple parts, try part 1
+                        # If parsing failed and we have multiple parts, try other parts
                         if len(parts) >= 2 and msg_bytes != parts[1]:
                             try:
                                 msg = self.msg_type()
                                 msg.ParseFromString(parts[1])
                                 self.callback(msg)
                             except Exception as e2:
-                                print(f"[Subscriber] Failed to parse message: {e}")
-                                print(f"[Subscriber] Message has {len(parts)} parts, tried part {len(parts)-1} and part 1")
+                                # Only print error occasionally to avoid spam
+                                if not hasattr(self, '_error_count'):
+                                    self._error_count = 0
+                                self._error_count += 1
+                                if self._error_count == 1 or self._error_count % 100 == 0:
+                                    print(f"[Subscriber] Parse error (#{self._error_count}): {e}")
                         else:
-                            print(f"[Subscriber] Error parsing message with type '{self.msg_type.DESCRIPTOR.full_name}': {e}")
+                            if not hasattr(self, '_error_count'):
+                                self._error_count = 0
+                            self._error_count += 1
+                            if self._error_count == 1:
+                                print(f"[Subscriber] Error parsing message: {e}")
                             
             except zmq.Again:
                 # Timeout, continue
