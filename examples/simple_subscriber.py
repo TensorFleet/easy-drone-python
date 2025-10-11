@@ -3,8 +3,16 @@
 Simple subscriber example.
 
 This example subscribes to string messages on a topic.
+
+Usage:
+  python simple_subscriber.py [topic]
+  
+Environment Variables:
+  GZ_PUBLISHER_ADDRESS - Direct publisher address (bypasses discovery)
+                         Example: tcp://172.17.0.1:45943
 """
 
+import os
 import time
 import sys
 sys.path.insert(0, '..')
@@ -42,6 +50,12 @@ def callback(msg):
 
 
 def main():
+    # Get topic from command line or use default
+    topic = sys.argv[1] if len(sys.argv) > 1 else "/example"
+    
+    # Get publisher address from environment
+    publisher_address = os.getenv('GZ_PUBLISHER_ADDRESS')
+    
     # Create node
     node = Node(verbose=True)
     
@@ -49,10 +63,15 @@ def main():
     StringMsg = create_string_msg_type()
     
     # Subscribe to topic
-    topic = "/example"
-    node.subscribe(StringMsg, topic, callback)
+    if publisher_address:
+        print(f"Using direct publisher address: {publisher_address}")
+        node.subscribe(StringMsg, topic, callback, publisher_address=publisher_address)
+    else:
+        node.subscribe(StringMsg, topic, callback)
     
     print(f"Subscribed to topic: {topic}")
+    if not publisher_address:
+        print("Note: Using discovery. If no messages arrive, try setting GZ_PUBLISHER_ADDRESS")
     print("Waiting for messages... (Press Ctrl+C to stop)")
     
     try:

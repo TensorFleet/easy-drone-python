@@ -15,11 +15,27 @@ A pure Python implementation of Gazebo Transport (gz-transport) providing pub/su
 
 ## Installation
 
-### Requirements
+> **📘 See [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions and troubleshooting.**
+
+### Quick Install
 
 ```bash
-pip install pyzmq protobuf
+# Create virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate  # On Linux/Mac
+
+# Install the package
+cd /path/to/gz-transport-py
+pip install -e .
 ```
+
+This installs gz-transport-py with **integrated gz-msgs** (212+ message types included!).
+
+### Requirements
+
+- Python 3.8+
+- `pyzmq>=25.0.0` - ZeroMQ for transport
+- `protobuf>=4.21.0` - Protocol buffers (**must be 4.21.0 or newer**)
 
 ### Optional: Zenoh Backend
 
@@ -29,13 +45,14 @@ To use the Zenoh transport backend:
 pip install eclipse-zenoh
 ```
 
-### Optional: Gazebo Messages
+### Troubleshooting
 
-For full compatibility with gz-transport C++ version:
+If you get `cannot import name 'runtime_version'` error, you have an old protobuf:
 
 ```bash
-# Install gz-msgs Python bindings (if available)
-pip install gz-msgs
+./fix_protobuf.sh
+# OR
+pip uninstall protobuf && pip install 'protobuf>=4.21.0'
 ```
 
 ## Quick Start
@@ -188,6 +205,79 @@ options = SubscribeOptions(
     throttled=True,
     msgs_per_sec=10.0
 )
+```
+
+## Troubleshooting
+
+### Discovery Issues: Not Receiving Messages
+
+**Problem**: Your Python code subscribes but doesn't receive messages, even though `gz topic -e` works.
+
+**Cause**: The Python bridge uses a **custom discovery protocol** that's incompatible with C++ gz-transport. This commonly happens when:
+
+- Gazebo runs in Docker (e.g., publisher at `tcp://172.17.0.1:45943`)
+- Cross-network or cross-subnet communication
+- Different discovery protocols between Python and C++ implementations
+
+**Solution**: Bypass discovery by providing the publisher address directly.
+
+#### Option 1: Automatic (Recommended - gi_bridge)
+
+Use the auto-connect script for image streaming:
+
+```bash
+# Automatically discovers publisher and connects
+./examples/gi_bridge_auto.sh /world/default/model/x500/link/camera/sensor/image --fps 30
+```
+
+#### Option 2: Manual Connection
+
+1. Get the publisher address:
+
+```bash
+gz topic -i -t /your/topic
+# Output: tcp://172.17.0.1:45943, gz.msgs.Image
+```
+
+2. Run with `--publisher-address`:
+
+```bash
+GZ_TRANSPORT_IMPLEMENTATION=zeromq python examples/gi_bridge.py \
+  --gz-topic /your/topic \
+  --publisher-address tcp://172.17.0.1:45943
+```
+
+Or in Python code:
+
+```python
+from gz_transport_py import Node
+from gz.msgs.image_pb2 import Image
+
+node = Node(verbose=True)
+
+# Direct connection bypassing discovery
+node.subscribe(
+    Image,
+    "/camera",
+    callback,
+    publisher_address="tcp://172.17.0.1:45943"
+)
+```
+
+#### Option 3: Environment Variable
+
+```bash
+export GZ_PUBLISHER_ADDRESS=tcp://172.17.0.1:45943
+python examples/simple_subscriber.py /your/topic
+```
+
+#### Helper Script
+
+Get publisher address for any topic:
+
+```bash
+./get_publisher_address_auto.sh /your/topic
+# Output: tcp://172.17.0.1:45943
 ```
 
 ## How It Works
