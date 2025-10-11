@@ -165,6 +165,7 @@ class YoloPublisher:
         self._is_running.set()
         self._capture: Optional[cv2.VideoCapture] = None
         self._av_container: Optional[av.container.InputContainer] = None
+        self._sdp_file: Optional[str] = None
         self._open_video_capture()
         
         # Create visualization window if needed
@@ -208,14 +209,36 @@ class YoloPublisher:
             providers = ["CPUExecutionProvider"]
         return ort.InferenceSession(model_path, providers=providers)
     
+    def _cleanup_sdp_file(self) -> None:
+        """Clean up the SDP file if it exists."""
+        if self._sdp_file and os.path.exists(self._sdp_file):
+            try:
+                os.remove(self._sdp_file)
+            except Exception:
+                pass
+    
     def _open_video_capture(self) -> None:
         """Open video capture (PyAV for UDP or OpenCV for file) with retry logic."""
         if self.input_is_gstreamer:
-            # Use PyAV for UDP H264 streams (much more reliable than OpenCV+GStreamer)
-            url = f"udp://127.0.0.1:{self.udp_port}"
-            print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
-            print(f"[YOLO] Stream URL: {url}")
-            print(f"[YOLO] Waiting for UDP data...")
+            # The gi_bridge sends RTP-encapsulated H.264, not raw UDP
+            # We need to create an SDP file to describe the RTP stream
+            sdp_content = f"""v=0
+o=- 0 0 IN IP4 127.0.0.1
+s=No Name
+c=IN IP4 127.0.0.1
+t=0 0
+a=tool:libavformat
+m=video {self.udp_port} RTP/AVP 96
+a=rtpmap:96 H264/90000
+a=fmtp:96 packetization-mode=1
+"""
+            self._sdp_file = f"/tmp/yolo_stream_{self.udp_port}.sdp"
+            with open(self._sdp_file, 'w') as f:
+                f.write(sdp_content)
+            
+            print(f"[YOLO] Attempting to open RTP stream on port {self.udp_port} using PyAV (FFmpeg)...")
+            print(f"[YOLO] Created SDP file: {self._sdp_file}")
+            print(f"[YOLO] Waiting for RTP data...")
             
             # Try to open with retries
             max_retries = 3
@@ -225,40 +248,17 @@ class YoloPublisher:
                 
                 def open_container():
                     """Thread function to open container with timeout."""
-                    # Try multiple approaches to open the UDP stream
-                    attempts = [
-                        # Attempt 1: Auto-detect format with minimal buffering
-                        (url, None, {
-                            'buffer_size': '1024000',
-                            'fifo_size': '1000000',
-                            'overrun_nonfatal': '1',
-                        }),
-                        # Attempt 2: Specify mpegts format (common for UDP streams)
-                        (url, 'mpegts', {
+                    # Open the SDP file which describes the RTP stream
+                    try:
+                        container = av.open(self._sdp_file, options={
+                            'protocol_whitelist': 'file,udp,rtp',
                             'fflags': 'nobuffer',
-                        }),
-                        # Attempt 3: Specify h264 format
-                        (url, 'h264', {
-                            'fflags': 'nobuffer',
-                        }),
-                        # Attempt 4: Let PyAV auto-detect everything
-                        (url, None, {}),
-                    ]
-                    
-                    last_error = None
-                    for stream_url, fmt, opts in attempts:
-                        try:
-                            if fmt:
-                                container = av.open(stream_url, format=fmt, options=opts)
-                            else:
-                                container = av.open(stream_url, options=opts)
-                            container_result[0] = container
-                            return
-                        except Exception as e:
-                            last_error = e
-                            continue
-                    
-                    exception_result[0] = last_error
+                            'flags': 'low_delay',
+                            'max_delay': '0',
+                        })
+                        container_result[0] = container
+                    except Exception as e:
+                        exception_result[0] = e
                 
                 # Run in thread with timeout
                 thread = threading.Thread(target=open_container, daemon=True)
@@ -301,32 +301,32 @@ class YoloPublisher:
                             print(f"[YOLO] Retrying in 2s...")
                             time.sleep(2)
             
-            print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
+            print(f"\n[YOLO] ERROR: Failed to open RTP stream after {max_retries} attempts")
             print("\n[YOLO] Common causes:")
-            print(f"  - No video stream is being sent to port {self.udp_port}")
-            print(f"  - Video source (drone, simulator, etc.) is not running")
+            print(f"  - No RTP stream is being sent to port {self.udp_port}")
+            print(f"  - Video source (gi_bridge, etc.) is not running")
             print(f"  - Firewall blocking UDP port {self.udp_port}")
-            print(f"  - Wrong port number (check video source configuration)")
+            print(f"  - Wrong port number (check gi_bridge configuration)")
             print("\n[YOLO] Troubleshooting steps:")
-            print(f"  1. Verify video source is running and sending UDP stream")
+            print(f"  1. Verify gi_bridge is running and sending RTP stream")
             print(f"")
-            print(f"  2. Test if UDP packets are arriving:")
+            print(f"  2. Test if RTP packets are arriving:")
             print(f"     sudo tcpdump -i lo udp port {self.udp_port} -c 10")
-            print(f"     (Install with: sudo apt-get install tcpdump)")
-            print(f"     Should show packets if stream is active")
+            print(f"     (Should show packets starting with '80 60...' if RTP is active)")
             print(f"")
-            print(f"  3. Test stream with ffplay:")
-            print(f"     ffplay -fflags nobuffer -flags low_delay udp://127.0.0.1:{self.udp_port}")
-            print(f"     (Install with: sudo apt-get install ffmpeg)")
+            print(f"  3. Test stream with ffplay using the SDP file:")
+            print(f"     ffplay -protocol_whitelist file,udp,rtp {self._sdp_file}")
             print(f"")
             print(f"  4. Test with GStreamer:")
-            print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
-            print(f"     (Should show 'chain' messages if receiving data)")
+            print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! 'application/x-rtp, payload=96' ! rtph264depay ! h264parse ! avdec_h264 ! autovideosink")
             print(f"")
-            print(f"  5. Check network statistics:")
-            print(f"     netstat -su | grep -i udp")
-            print(f"     (Look for UDP receive errors or dropped packets)")
-            raise RuntimeError("Failed to open UDP video source")
+            print(f"  5. Check gi_bridge is using correct port:")
+            print(f"     ps aux | grep gi_bridge")
+            
+            # Clean up SDP file
+            self._cleanup_sdp_file()
+            
+            raise RuntimeError("Failed to open RTP video source")
         else:
             # Use OpenCV for video files
             cap = cv2.VideoCapture(self.video_path)
@@ -562,6 +562,7 @@ class YoloPublisher:
                 self._capture.release()
             if self._av_container is not None:
                 self._av_container.close()
+            self._cleanup_sdp_file()
             if self.visualize:
                 cv2.destroyAllWindows()
             self.zenoh_session.close()
