@@ -165,7 +165,6 @@ class YoloPublisher:
         self._is_running.set()
         self._capture: Optional[cv2.VideoCapture] = None
         self._av_container: Optional[av.container.InputContainer] = None
-        self._sdp_file: Optional[str] = None
         self._open_video_capture()
         
         # Create visualization window if needed
@@ -209,124 +208,75 @@ class YoloPublisher:
             providers = ["CPUExecutionProvider"]
         return ort.InferenceSession(model_path, providers=providers)
     
-    def _cleanup_sdp_file(self) -> None:
-        """Clean up the SDP file if it exists."""
-        if self._sdp_file and os.path.exists(self._sdp_file):
-            try:
-                os.remove(self._sdp_file)
-            except Exception:
-                pass
-    
     def _open_video_capture(self) -> None:
         """Open video capture (PyAV for UDP or OpenCV for file) with retry logic."""
         if self.input_is_gstreamer:
-            # The gi_bridge sends RTP-encapsulated H.264, not raw UDP
-            # We need to create an SDP file to describe the RTP stream
-            sdp_content = f"""v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=No Name
-c=IN IP4 127.0.0.1
-t=0 0
-a=tool:libavformat
-m=video {self.udp_port} RTP/AVP 96
-a=rtpmap:96 H264/90000
-a=fmtp:96 packetization-mode=1
-"""
-            self._sdp_file = f"/tmp/yolo_stream_{self.udp_port}.sdp"
-            with open(self._sdp_file, 'w') as f:
-                f.write(sdp_content)
-            
-            print(f"[YOLO] Attempting to open RTP stream on port {self.udp_port} using PyAV (FFmpeg)...")
-            print(f"[YOLO] Created SDP file: {self._sdp_file}")
-            print(f"[YOLO] Waiting for RTP data...")
+            # Use PyAV for UDP H264 streams (much more reliable than OpenCV+GStreamer)
+            url = f"udp://127.0.0.1:{self.udp_port}?fifo_size=1000000&overrun_nonfatal=1"
+            print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
+            print(f"[YOLO] Stream URL: {url}")
+            print(f"[YOLO] Waiting for UDP data (this will timeout if no stream is available)...")
             
             # Try to open with retries
             max_retries = 3
             for attempt in range(max_retries):
-                container_result = [None]
-                exception_result = [None]
-                
-                def open_container():
-                    """Thread function to open container with timeout."""
-                    # Open the SDP file which describes the RTP stream
-                    try:
-                        container = av.open(self._sdp_file, options={
-                            'protocol_whitelist': 'file,udp,rtp',
-                            'fflags': 'nobuffer',
-                            'flags': 'low_delay',
-                            'max_delay': '0',
-                        })
-                        container_result[0] = container
-                    except Exception as e:
-                        exception_result[0] = e
-                
-                # Run in thread with timeout
-                thread = threading.Thread(target=open_container, daemon=True)
-                thread.start()
-                thread.join(timeout=10.0)  # 10 second timeout for the entire open operation
-                
-                if thread.is_alive():
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream (10s)")
+                try:
+                    # FFmpeg options to prevent hanging and add timeout
+                    container = av.open(url, options={
+                        'timeout': '5000000',  # 5 second timeout in microseconds
+                        'max_delay': '500000',  # 0.5 second max delay
+                        'fflags': 'nobuffer',  # Minimize buffering
+                        'flags': 'low_delay',  # Low latency mode
+                        'analyzeduration': '1000000',  # 1 second to analyze stream
+                        'probesize': '1000000',  # 1MB probe size
+                    }, timeout=5.0)  # PyAV timeout in seconds
+                    
+                    # Test if we can get a stream
+                    if container.streams.video:
+                        print(f"[YOLO] UDP stream opened successfully using PyAV!")
+                        print(f"[YOLO] Video codec: {container.streams.video[0].codec_context.name}")
+                        self._av_container = container
+                        return
+                    else:
+                        print(f"[YOLO] No video stream found in container")
+                        container.close()
+                except av.error.TimeoutError:
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries}: Timeout waiting for UDP stream")
                     if attempt < max_retries - 1:
                         print(f"[YOLO] Retrying in 2s...")
                         time.sleep(2)
-                    continue
-                
-                if exception_result[0]:
-                    error_msg = str(exception_result[0])
-                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
-                    if "Immediate exit requested" in error_msg:
-                        print(f"[YOLO] Hint: The stream format might not be auto-detectable")
-                        print(f"[YOLO] Run this to check stream format:")
-                        print(f"[YOLO]   ffprobe udp://127.0.0.1:{self.udp_port}")
+                except Exception as e:
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {e}")
                     if attempt < max_retries - 1:
                         print(f"[YOLO] Retrying in 2s...")
                         time.sleep(2)
-                    continue
-                
-                if container_result[0]:
-                    try:
-                        # Test if we can get a stream
-                        if container_result[0].streams.video:
-                            print(f"[YOLO] UDP stream opened successfully using PyAV!")
-                            print(f"[YOLO] Video codec: {container_result[0].streams.video[0].codec_context.name}")
-                            self._av_container = container_result[0]
-                            return
-                        else:
-                            print(f"[YOLO] No video stream found in container")
-                            container_result[0].close()
-                    except Exception as e:
-                        print(f"[YOLO] Error inspecting container: {e}")
-                        if attempt < max_retries - 1:
-                            print(f"[YOLO] Retrying in 2s...")
-                            time.sleep(2)
             
-            print(f"\n[YOLO] ERROR: Failed to open RTP stream after {max_retries} attempts")
+            print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
             print("\n[YOLO] Common causes:")
-            print(f"  - No RTP stream is being sent to port {self.udp_port}")
-            print(f"  - Video source (gi_bridge, etc.) is not running")
+            print(f"  - No video stream is being sent to port {self.udp_port}")
+            print(f"  - Video source (drone, simulator, etc.) is not running")
             print(f"  - Firewall blocking UDP port {self.udp_port}")
-            print(f"  - Wrong port number (check gi_bridge configuration)")
+            print(f"  - Wrong port number (check video source configuration)")
             print("\n[YOLO] Troubleshooting steps:")
-            print(f"  1. Verify gi_bridge is running and sending RTP stream")
+            print(f"  1. Verify video source is running and sending UDP stream")
             print(f"")
-            print(f"  2. Test if RTP packets are arriving:")
+            print(f"  2. Test if UDP packets are arriving:")
             print(f"     sudo tcpdump -i lo udp port {self.udp_port} -c 10")
-            print(f"     (Should show packets starting with '80 60...' if RTP is active)")
+            print(f"     (Install with: sudo apt-get install tcpdump)")
+            print(f"     Should show packets if stream is active")
             print(f"")
-            print(f"  3. Test stream with ffplay using the SDP file:")
-            print(f"     ffplay -protocol_whitelist file,udp,rtp {self._sdp_file}")
+            print(f"  3. Test stream with ffplay:")
+            print(f"     ffplay -fflags nobuffer -flags low_delay udp://127.0.0.1:{self.udp_port}")
+            print(f"     (Install with: sudo apt-get install ffmpeg)")
             print(f"")
             print(f"  4. Test with GStreamer:")
-            print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! 'application/x-rtp, payload=96' ! rtph264depay ! h264parse ! avdec_h264 ! autovideosink")
+            print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
+            print(f"     (Should show 'chain' messages if receiving data)")
             print(f"")
-            print(f"  5. Check gi_bridge is using correct port:")
-            print(f"     ps aux | grep gi_bridge")
-            
-            # Clean up SDP file
-            self._cleanup_sdp_file()
-            
-            raise RuntimeError("Failed to open RTP video source")
+            print(f"  5. Check network statistics:")
+            print(f"     netstat -su | grep -i udp")
+            print(f"     (Look for UDP receive errors or dropped packets)")
+            raise RuntimeError("Failed to open UDP video source")
         else:
             # Use OpenCV for video files
             cap = cv2.VideoCapture(self.video_path)
@@ -562,7 +512,6 @@ a=fmtp:96 packetization-mode=1
                 self._capture.release()
             if self._av_container is not None:
                 self._av_container.close()
-            self._cleanup_sdp_file()
             if self.visualize:
                 cv2.destroyAllWindows()
             self.zenoh_session.close()
