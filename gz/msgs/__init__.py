@@ -1,0 +1,235 @@
+"""
+Gazebo Messages - Python Protobuf Bindings
+
+This package contains all protobuf message definitions from gz-msgs,
+compiled to native Python. These messages are 100% compatible with
+the C++ gz-msgs library.
+
+Generated from gz-msgs proto files.
+"""
+
+# Import all message types for convenience
+# This allows: from gz.msgs import StringMsg, Vector3d, etc.
+
+try:
+    from .actor_pb2 import *
+    from .actuators_pb2 import *
+    from .air_pressure_sensor_pb2 import *
+    from .air_speed_pb2 import *
+    from .air_speed_sensor_pb2 import *
+    from .altimeter_pb2 import *
+    from .altimeter_sensor_pb2 import *
+    from .annotated_axis_aligned_2d_box_pb2 import *
+    from .annotated_axis_aligned_2d_box_v_pb2 import *
+    from .annotated_oriented_3d_box_pb2 import *
+    from .annotated_oriented_3d_box_v_pb2 import *
+    from .any_pb2 import *
+    from .atmosphere_pb2 import *
+    from .axis_pb2 import *
+    from .axis_aligned_2d_box_pb2 import *
+    from .axis_aligned_box_pb2 import *
+    from .battery_pb2 import *
+    from .battery_state_pb2 import *
+    from .boolean_pb2 import *
+    from .boxgeom_pb2 import *
+    from .bytes_pb2 import *
+    from .camera_cmd_pb2 import *
+    from .camera_info_pb2 import *
+    from .camera_lens_pb2 import *
+    from .camerasensor_pb2 import *
+    from .cameratrack_pb2 import *
+    from .capsulegeom_pb2 import *
+    from .cessna_pb2 import *
+    from .clock_pb2 import *
+    from .cmd_vel2d_pb2 import *
+    from .collision_pb2 import *
+    from .color_pb2 import *
+    from .conegeom_pb2 import *
+    from .contact_pb2 import *
+    from .contacts_pb2 import *
+    from .contactsensor_pb2 import *
+    from .cylindergeom_pb2 import *
+    from .data_load_options_pb2 import *
+    from .dataframe_pb2 import *
+    from .density_pb2 import *
+    from .diagnostics_pb2 import *
+    from .discovery_pb2 import *
+    from .distortion_pb2 import *
+    from .double_pb2 import *
+    from .double_v_pb2 import *
+    from .duration_pb2 import *
+    from .dvl_beam_state_pb2 import *
+    from .dvl_kinematic_estimate_pb2 import *
+    from .dvl_range_estimate_pb2 import *
+    from .dvl_tracking_target_pb2 import *
+    from .dvl_velocity_tracking_pb2 import *
+    from .ellipsoidgeom_pb2 import *
+    from .empty_pb2 import *
+    from .entity_pb2 import *
+    from .entity_factory_pb2 import *
+    from .entity_factory_v_pb2 import *
+    from .entity_plugin_v_pb2 import *
+    from .entity_wrench_pb2 import *
+    from .entity_wrench_map_pb2 import *
+    from .float_pb2 import *
+    from .float_v_pb2 import *
+    from .fluid_pb2 import *
+    from .fluid_pressure_pb2 import *
+    from .fog_pb2 import *
+    from .friction_pb2 import *
+    from .fuel_metadata_pb2 import *
+    from .geometry_pb2 import *
+    from .gps_pb2 import *
+    from .gps_sensor_pb2 import *
+    from .gui_pb2 import *
+    from .gui_camera_pb2 import *
+    from .header_pb2 import *
+    from .heightmapgeom_pb2 import *
+    from .hydra_pb2 import *
+    from .image_pb2 import *
+    from .imagegeom_pb2 import *
+    from .imu_pb2 import *
+    from .imu_sensor_pb2 import *
+    from .inertial_pb2 import *
+    from .int32_pb2 import *
+    from .int32_v_pb2 import *
+    from .int64_pb2 import *
+    from .int64_v_pb2 import *
+    from .joint_pb2 import *
+    from .joint_animation_pb2 import *
+    from .joint_cmd_pb2 import *
+    from .joint_trajectory_pb2 import *
+    from .joint_trajectory_point_pb2 import *
+    from .joint_wrench_pb2 import *
+    from .joy_pb2 import *
+    from .joystick_pb2 import *
+    from .laserscan_pb2 import *
+    from .lens_pb2 import *
+    from .lidar_sensor_pb2 import *
+    from .light_pb2 import *
+    from .link_pb2 import *
+    from .link_data_pb2 import *
+    from .log_control_pb2 import *
+    from .log_playback_control_pb2 import *
+    from .log_playback_stats_pb2 import *
+    from .log_status_pb2 import *
+    from .logical_camera_image_pb2 import *
+    from .logical_camera_sensor_pb2 import *
+    from .magnetometer_pb2 import *
+    from .magnetometer_sensor_pb2 import *
+    from .marker_pb2 import *
+    from .marker_v_pb2 import *
+    from .material_pb2 import *
+    from .material_color_pb2 import *
+    from .meshgeom_pb2 import *
+    from .model_pb2 import *
+    from .model_configuration_pb2 import *
+    from .model_v_pb2 import *
+    from .navsat_pb2 import *
+    from .navsat_sensor_pb2 import *
+    from .navsat_with_covariance_pb2 import *
+    from .occupancy_grid_pb2 import *
+    from .odometry_pb2 import *
+    from .odometry_with_covariance_pb2 import *
+    from .oriented_3d_box_pb2 import *
+    from .packet_pb2 import *
+    from .param_pb2 import *
+    from .param_v_pb2 import *
+    from .parameter_pb2 import *
+    from .parameter_declaration_pb2 import *
+    from .parameter_declarations_pb2 import *
+    from .parameter_error_pb2 import *
+    from .parameter_name_pb2 import *
+    from .parameter_value_pb2 import *
+    from .particle_emitter_pb2 import *
+    from .particle_emitter_v_pb2 import *
+    from .performance_sensor_metrics_pb2 import *
+    from .physics_pb2 import *
+    from .pid_pb2 import *
+    from .planegeom_pb2 import *
+    from .plugin_pb2 import *
+    from .plugin_v_pb2 import *
+    from .pointcloud_pb2 import *
+    from .pointcloud_packed_pb2 import *
+    from .polylinegeom_pb2 import *
+    from .pose_pb2 import *
+    from .pose_animation_pb2 import *
+    from .pose_trajectory_pb2 import *
+    from .pose_v_pb2 import *
+    from .pose_with_covariance_pb2 import *
+    from .projector_pb2 import *
+    from .propagation_grid_pb2 import *
+    from .propagation_particle_pb2 import *
+    from .publish_pb2 import *
+    from .publishers_pb2 import *
+    from .quaternion_pb2 import *
+    from .raysensor_pb2 import *
+    from .request_pb2 import *
+    from .response_pb2 import *
+    from .rest_login_pb2 import *
+    from .rest_logout_pb2 import *
+    from .rest_post_pb2 import *
+    from .rest_response_pb2 import *
+    from .road_pb2 import *
+    from .scene_pb2 import *
+    from .sdf_generator_config_pb2 import *
+    from .selection_pb2 import *
+    from .sensor_pb2 import *
+    from .sensor_noise_pb2 import *
+    from .sensor_v_pb2 import *
+    from .serialized_pb2 import *
+    from .serialized_map_pb2 import *
+    from .server_control_pb2 import *
+    from .shadows_pb2 import *
+    from .sim_event_pb2 import *
+    from .sky_pb2 import *
+    from .sonar_pb2 import *
+    from .spheregeom_pb2 import *
+    from .spherical_coordinates_pb2 import *
+    from .statistic_pb2 import *
+    from .stringmsg_pb2 import *
+    from .stringmsg_v_pb2 import *
+    from .subscribe_pb2 import *
+    from .surface_pb2 import *
+    from .tactile_pb2 import *
+    from .test_pb2 import *
+    from .time_pb2 import *
+    from .topic_info_pb2 import *
+    from .track_visual_pb2 import *
+    from .twist_pb2 import *
+    from .twist_with_covariance_pb2 import *
+    from .uint32_pb2 import *
+    from .uint32_v_pb2 import *
+    from .uint64_pb2 import *
+    from .uint64_v_pb2 import *
+    from .undo_redo_pb2 import *
+    from .user_cmd_pb2 import *
+    from .user_cmd_stats_pb2 import *
+    from .vector2d_pb2 import *
+    from .vector3d_pb2 import *
+    from .version_pb2 import *
+    from .version_range_pb2 import *
+    from .versioned_name_pb2 import *
+    from .video_record_pb2 import *
+    from .visual_pb2 import *
+    from .visual_v_pb2 import *
+    from .web_request_pb2 import *
+    from .wheel_slip_parameters_cmd_pb2 import *
+    from .wind_pb2 import *
+    from .wireless_node_pb2 import *
+    from .wireless_nodes_pb2 import *
+    from .world_control_pb2 import *
+    from .world_control_state_pb2 import *
+    from .world_modify_pb2 import *
+    from .world_reset_pb2 import *
+    from .world_stats_pb2 import *
+    from .wrench_pb2 import *
+except ImportError as e:
+    import sys
+    print(f"Warning: Could not import some gz-msgs types: {e}", file=sys.stderr)
+
+__all__ = [
+    # All message types are exported
+]
+
+__version__ = "11.0.0"
