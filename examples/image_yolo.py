@@ -11,8 +11,9 @@ import queue
 import struct
 import threading
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
+import av
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -29,16 +30,6 @@ def convert_xywh_to_xyxy(xywh_array: np.ndarray) -> np.ndarray:
     return coord
 
 
-def build_gstreamer_pipeline(udp_port: int) -> str:
-    """Build GStreamer pipeline string for UDP H264/RTP stream."""
-    return (
-        f"udpsrc port={udp_port} ! "
-        "application/x-rtp, media=(string)video, encoding-name=(string)H264 ! "
-        "rtph264depay ! "
-        "avdec_h264 threads=4 ! "
-        "videoconvert ! "
-        "video/x-raw, format=BGR ! appsink"
-    )
 
 
 def serialize_detection2d_array_cdr(
@@ -172,7 +163,9 @@ class YoloPublisher:
         self.frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2)
         self._is_running = threading.Event()
         self._is_running.set()
-        self._capture = self._open_video_capture()
+        self._capture: Optional[cv2.VideoCapture] = None
+        self._av_container: Optional[av.container.InputContainer] = None
+        self._open_video_capture()
         
         # Create visualization window if needed
         if self.visualize:
@@ -215,57 +208,54 @@ class YoloPublisher:
             providers = ["CPUExecutionProvider"]
         return ort.InferenceSession(model_path, providers=providers)
     
-    def _open_video_capture(self) -> cv2.VideoCapture:
-        """Open video capture (GStreamer or file) with retry logic."""
+    def _open_video_capture(self) -> None:
+        """Open video capture (PyAV for UDP or OpenCV for file) with retry logic."""
         if self.input_is_gstreamer:
-            pipeline = build_gstreamer_pipeline(self.udp_port)
-            print(f"[YOLO] Attempting to open GStreamer pipeline on port {self.udp_port}...")
-            print(f"[YOLO] Checking OpenCV GStreamer support...")
-            
-            # Check if OpenCV has GStreamer support
-            build_info = cv2.getBuildInformation()
-            if 'GStreamer' in build_info and 'YES' in build_info.split('GStreamer')[1].split('\n')[0]:
-                print("[YOLO] OpenCV has GStreamer support ✓")
-            else:
-                print("[YOLO] WARNING: OpenCV may not have GStreamer support!")
-                print("[YOLO] Connection may fail. Troubleshooting steps:")
-                print("[YOLO]   1. Install system OpenCV with GStreamer:")
-                print("[YOLO]      sudo apt-get install python3-opencv")
-                print("[YOLO]   2. Remove pip OpenCV if present:")
-                print("[YOLO]      pip uninstall opencv-python opencv-python-headless")
-                print("[YOLO]   3. Verify support:")
-                print("[YOLO]      python3 -c 'import cv2; print(cv2.getBuildInformation())' | grep -A 5 GStreamer")
+            # Use PyAV for UDP H264 streams (much more reliable than OpenCV+GStreamer)
+            url = f"udp://127.0.0.1:{self.udp_port}?fifo_size=1000000&overrun_nonfatal=1"
+            print(f"[YOLO] Attempting to open UDP stream on port {self.udp_port} using PyAV (FFmpeg)...")
+            print(f"[YOLO] Stream URL: {url}")
             
             # Try to open with retries
             max_retries = 5
             for attempt in range(max_retries):
-                cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-                if cap.isOpened():
-                    print(f"[YOLO] GStreamer pipeline opened successfully!")
-                    return cap
-                print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed, retrying in 2s...")
-                time.sleep(2)
+                try:
+                    container = av.open(url, options={
+                        'rtsp_transport': 'udp',
+                        'max_delay': '500000',
+                    })
+                    # Test if we can get a stream
+                    if container.streams.video:
+                        print(f"[YOLO] UDP stream opened successfully using PyAV!")
+                        print(f"[YOLO] Video codec: {container.streams.video[0].codec_context.name}")
+                        self._av_container = container
+                        return
+                    else:
+                        print(f"[YOLO] No video stream found in container")
+                        container.close()
+                except Exception as e:
+                    print(f"[YOLO] Attempt {attempt + 1}/{max_retries} failed: {e}")
+                    if attempt < max_retries - 1:
+                        print(f"[YOLO] Retrying in 2s...")
+                        time.sleep(2)
             
-            print(f"\n[YOLO] ERROR: Failed to open GStreamer pipeline after {max_retries} attempts")
+            print(f"\n[YOLO] ERROR: Failed to open UDP stream after {max_retries} attempts")
             print("\n[YOLO] Troubleshooting steps:")
-            print(f"  1. Test if video stream is available:")
+            print(f"  1. Test if video stream is available using ffplay:")
+            print(f"     ffplay -fflags nobuffer -flags low_delay udp://127.0.0.1:{self.udp_port}")
+            print(f"")
+            print(f"  2. Test with gst-launch-1.0:")
             print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
             print(f"     (Press Ctrl+C after seeing data packets)")
             print(f"")
-            print(f"  2. Check if port {self.udp_port} is in use:")
+            print(f"  3. Check if port {self.udp_port} is receiving data:")
             print(f"     sudo netstat -tulpn | grep {self.udp_port}")
-            print(f"     (Should show process listening/sending on port {self.udp_port})")
             print(f"")
-            print(f"  3. Verify OpenCV has GStreamer support:")
-            print(f"     python3 -c 'import cv2; print(cv2.getBuildInformation())' | grep -A 5 GStreamer")
-            print(f"     (Should show 'GStreamer: YES')")
-            print(f"")
-            print(f"  4. Check GStreamer plugins are installed:")
-            print(f"     gst-inspect-1.0 udpsrc")
-            print(f"     gst-inspect-1.0 rtph264depay")
-            print(f"     gst-inspect-1.0 avdec_h264")
-            raise RuntimeError("Failed to open GStreamer video source")
+            print(f"  4. Verify PyAV/FFmpeg is installed:")
+            print(f"     python3 -c 'import av; print(av.__version__)'")
+            raise RuntimeError("Failed to open UDP video source")
         else:
+            # Use OpenCV for video files
             cap = cv2.VideoCapture(self.video_path)
             if not cap.isOpened():
                 print(f"\n[YOLO] ERROR: Failed to open video file: {self.video_path}")
@@ -277,13 +267,11 @@ class YoloPublisher:
                 print(f"     ffprobe -v error -show_format -show_streams {self.video_path}")
                 print(f"     (Install with: sudo apt-get install ffmpeg)")
                 print(f"")
-                print(f"  3. Verify OpenCV can read the codec:")
-                print(f"     python3 -c 'import cv2; print(cv2.getBuildInformation())' | grep -A 10 'Video I/O'")
-                print(f"")
-                print(f"  4. Try converting to a compatible format:")
-                print(f"     ffmpeg -i {self.video_path} -c:v libx264 -preset fast output.mp4")
+                print(f"  3. Try playing with ffplay:")
+                print(f"     ffplay {self.video_path}")
                 raise RuntimeError(f"Failed to open video file: {self.video_path}")
-            return cap
+            print(f"[YOLO] Video file opened successfully: {self.video_path}")
+            self._capture = cap
     
     def _frame_reader_loop(self) -> None:
         """Background thread to continuously read frames."""
@@ -291,53 +279,92 @@ class YoloPublisher:
         start_time = time.time()
         consecutive_failures = 0
         MAX_FAILURES = 30  # ~3 seconds at 10ms sleep
+        
         while self._is_running.is_set():
-            ok, frame = self._capture.read()
-            if not ok:
-                if not self.input_is_gstreamer:
-                    # Video file ended, loop back to start
-                    self._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    print("[YOLO] Video file ended, looping...")
+            frame = None
+            ok = False
+            
+            try:
+                if self.input_is_gstreamer:
+                    # PyAV-based UDP stream reading
+                    if self._av_container is None:
+                        time.sleep(0.01)
+                        continue
+                    
+                    try:
+                        for packet in self._av_container.demux(video=0):
+                            for av_frame in packet.decode():
+                                # Convert PyAV frame to numpy array (BGR format for OpenCV compatibility)
+                                frame = av_frame.to_ndarray(format='bgr24')
+                                ok = True
+                                break
+                            if ok:
+                                break
+                    except av.error.EOFError:
+                        print("[YOLO] Stream ended (EOF)")
+                        ok = False
+                    except Exception as e:
+                        print(f"[YOLO] Error reading from PyAV stream: {e}")
+                        ok = False
+                else:
+                    # OpenCV-based file reading
+                    if self._capture is None:
+                        time.sleep(0.01)
+                        continue
+                    ok, frame = self._capture.read()
+                
+                if not ok or frame is None:
+                    if not self.input_is_gstreamer:
+                        # Video file ended, loop back to start
+                        if self._capture is not None:
+                            self._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            print("[YOLO] Video file ended, looping...")
+                        time.sleep(0.01)
+                        continue
+
+                    # UDP stream: track failures and attempt reconnection
+                    consecutive_failures += 1
+                    if consecutive_failures > MAX_FAILURES:
+                        print("[YOLO] Stream lost, attempting reconnection...")
+                        try:
+                            # Release current container and try to reopen
+                            if self._av_container is not None:
+                                self._av_container.close()
+                                self._av_container = None
+                        except Exception:
+                            pass
+                        try:
+                            self._open_video_capture()
+                            consecutive_failures = 0
+                            print("[YOLO] Reconnected successfully!")
+                        except Exception as e:
+                            print(f"[YOLO] ERROR: Reconnection failed: {e}")
+                            print("\n[YOLO] Troubleshooting steps:")
+                            print(f"  1. Check if stream is still available:")
+                            print(f"     ffplay udp://127.0.0.1:{self.udp_port}")
+                            print(f"")
+                            print(f"  2. Check system logs for network issues:")
+                            print(f"     dmesg | tail -n 50")
                     time.sleep(0.01)
                     continue
-
-                # GStreamer input: track failures and attempt reconnection
-                consecutive_failures += 1
-                if consecutive_failures > MAX_FAILURES:
-                    print("[YOLO] Stream lost, attempting reconnection...")
-                    try:
-                        # Release current capture and try to reopen
-                        self._capture.release()
-                    except Exception:
-                        pass
-                    try:
-                        self._capture = self._open_video_capture()
-                        consecutive_failures = 0
-                        print("[YOLO] Reconnected successfully!")
-                    except Exception as e:
-                        print(f"[YOLO] ERROR: Reconnection failed: {e}")
-                        print("\n[YOLO] Troubleshooting steps:")
-                        print(f"  1. Check if stream is still available:")
-                        print(f"     gst-launch-1.0 udpsrc port={self.udp_port} ! fakesink dump=true")
-                        print(f"")
-                        print(f"  2. Check system logs for network issues:")
-                        print(f"     dmesg | tail -n 50")
+                
+                # Reset on successful read
+                consecutive_failures = 0
+                try:
+                    self.frame_queue.put(frame, timeout=0.05)
+                    frames_received += 1
+                except queue.Full:
+                    pass
+                if frames_received and frames_received % 120 == 0:
+                    elapsed = time.time() - start_time
+                    fps = frames_received / elapsed if elapsed > 0 else 0.0
+                    print(f"[YOLO] Frame Reception Rate: {fps:.2f} FPS")
+                    frames_received = 0
+                    start_time = time.time()
+                    
+            except Exception as e:
+                print(f"[YOLO] Unexpected error in frame reader loop: {e}")
                 time.sleep(0.01)
-                continue
-            
-            # Reset on successful read
-            consecutive_failures = 0
-            try:
-                self.frame_queue.put(frame, timeout=0.05)
-                frames_received += 1
-            except queue.Full:
-                pass
-            if frames_received and frames_received % 120 == 0:
-                elapsed = time.time() - start_time
-                fps = frames_received / elapsed if elapsed > 0 else 0.0
-                print(f"[YOLO] Frame Reception Rate: {fps:.2f} FPS")
-                frames_received = 0
-                start_time = time.time()
     
     def _preprocess(self, bgr_frame: np.ndarray) -> np.ndarray:
         """Preprocess frame for YOLO inference."""
@@ -458,7 +485,10 @@ class YoloPublisher:
         finally:
             self._is_running.clear()
             self._capture_thread.join(timeout=1.0)
-            self._capture.release()
+            if self._capture is not None:
+                self._capture.release()
+            if self._av_container is not None:
+                self._av_container.close()
             if self.visualize:
                 cv2.destroyAllWindows()
             self.zenoh_session.close()

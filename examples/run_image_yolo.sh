@@ -23,11 +23,6 @@ fi
 # Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
-# Prefer GStreamer backend for OpenCV and ensure plugins can be found
-export OPENCV_VIDEOIO_PRIORITY_GSTREAMER=1
-export GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER:-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner}
-export GST_PLUGIN_PATH=${GST_PLUGIN_PATH:-/usr/lib/x86_64-linux-gnu/gstreamer-1.0}
-
 # Default arguments (can be overridden)
 # Default to sample.mp4 for standalone testing
 USE_GSTREAMER="${USE_GSTREAMER:-false}"
@@ -70,16 +65,20 @@ if [ -n "$ZENOH_CONNECT" ]; then
     CMD="$CMD --zenoh-connect $ZENOH_CONNECT"
 fi
 
-# Check if we're using system OpenCV (with GStreamer support)
-echo "Checking OpenCV configuration..."
-if python3 -c "import cv2" 2>/dev/null; then
-    HAS_GSTREAMER=$(python3 -c "import cv2; print('YES' if 'GStreamer' in cv2.getBuildInformation() and 'YES' in cv2.getBuildInformation().split('GStreamer')[1].split('\n')[0] else 'NO')" 2>/dev/null || echo "UNKNOWN")
-    if [ "$HAS_GSTREAMER" = "YES" ]; then
-        echo "✓ OpenCV has GStreamer support"
-    elif [ "$USE_GSTREAMER" = "true" ]; then
-        echo "⚠ WARNING: OpenCV does not have GStreamer support!"
-        echo "  This may cause connection failures when using USE_GSTREAMER=true"
-        echo "  Ensure python3-opencv system package is installed"
+# Check if PyAV is available (required for UDP streaming)
+echo "Checking dependencies..."
+if python3 -c "import av" 2>/dev/null; then
+    PYAV_VERSION=$(python3 -c "import av; print(av.__version__)" 2>/dev/null || echo "unknown")
+    echo "✓ PyAV (av) version: $PYAV_VERSION"
+else
+    echo "⚠ WARNING: PyAV (av) is not installed!"
+    echo "  This is required for UDP streaming (USE_GSTREAMER=true)"
+    echo "  Install with: pip install av"
+    if [ "$USE_GSTREAMER" = "true" ]; then
+        echo ""
+        echo "ERROR: Cannot use USE_GSTREAMER=true without PyAV installed"
+        deactivate
+        exit 1
     fi
 fi
 echo ""
