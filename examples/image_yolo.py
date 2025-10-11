@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     from gz_transport_py import Node
     from gz.msgs.image_pb2 import Image
+    from gz.msgs import image_pb2
 except Exception as e:
     print("[YOLO] ERROR: gz-transport-py or gz-msgs not available.")
     print("Install gz-transport-py: cd gz-transport-py && pip install -e .")
@@ -225,13 +226,19 @@ class YoloPublisher:
         try:
             # Convert Gazebo Image message to numpy array
             # Gazebo images are typically RGB format
-            if msg.pixel_format_type == Image.RGB_INT8:
+            # Debug: print first time to see format
+            if not hasattr(self, '_printed_format'):
+                print(f"[YOLO] Image format: {msg.pixel_format_type} (RGB_INT8={image_pb2.RGB_INT8}, BGR_INT8={image_pb2.BGR_INT8})")
+                print(f"[YOLO] Image size: {msg.width}x{msg.height}, data: {len(msg.data)} bytes")
+                self._printed_format = True
+            
+            if msg.pixel_format_type == image_pb2.RGB_INT8:
                 # RGB8 format
                 img_array = np.frombuffer(msg.data, dtype=np.uint8)
                 img_array = img_array.reshape((msg.height, msg.width, 3))
                 # Convert RGB to BGR for OpenCV
                 frame = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            elif msg.pixel_format_type == Image.BGR_INT8:
+            elif msg.pixel_format_type == image_pb2.BGR_INT8:
                 # Already BGR
                 img_array = np.frombuffer(msg.data, dtype=np.uint8)
                 frame = img_array.reshape((msg.height, msg.width, 3))
