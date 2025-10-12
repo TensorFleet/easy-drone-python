@@ -47,7 +47,7 @@ python examples/simple_publisher.py  # Run from anywhere!
 
 Your existing code works exactly the same:
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 node = Node()

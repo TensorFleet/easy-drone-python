@@ -9,7 +9,7 @@ Note: Install easy-drone first with: pip install -e .
 
 import time
 import sys
-from gz_transport_py import Node, NodeOptions
+from gz_transport import Node, NodeOptions
 
 
 # Simple message type for demonstration

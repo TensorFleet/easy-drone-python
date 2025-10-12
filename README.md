@@ -1,5 +1,10 @@
 # Easy Drone - Pure Python Gazebo Transport
 
+[![Tests](https://github.com/TensorFleet/easy-drone-python/workflows/Tests/badge.svg)](https://github.com/TensorFleet/easy-drone-python/actions)
+[![PyPI](https://img.shields.io/pypi/v/easy-drone)](https://pypi.org/project/easy-drone/)
+[![Python](https://img.shields.io/pypi/pyversions/easy-drone)](https://pypi.org/project/easy-drone/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 A pure Python implementation of Gazebo Transport (gz-transport) for easy drone communication, providing pub/sub messaging with automatic discovery.
 
 ## Features
@@ -62,7 +67,7 @@ pip install -e .[dev]
 ### Publisher
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 # Create node
@@ -80,7 +85,7 @@ pub.publish(msg)
 ### Subscriber
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 def callback(msg):
@@ -148,7 +153,7 @@ python examples/simple_publisher.py
 Main interface for communication.
 
 ```python
-from gz_transport_py import Node, NodeOptions
+from gz_transport import Node, NodeOptions
 
 # Create node
 node = Node()
@@ -188,7 +193,7 @@ pub = node.advertise("/my_topic", MyMsgType)
 #### NodeOptions
 
 ```python
-from gz_transport_py import NodeOptions
+from gz_transport import NodeOptions
 
 options = NodeOptions(
     namespace="my_namespace",
@@ -202,7 +207,7 @@ options.add_topic_remap("/old_topic", "/new_topic")
 #### AdvertiseOptions
 
 ```python
-from gz_transport_py import AdvertiseOptions, Scope
+from gz_transport import AdvertiseOptions, Scope
 
 options = AdvertiseOptions(
     scope=Scope.ALL  # PROCESS, HOST, or ALL
@@ -212,7 +217,7 @@ options = AdvertiseOptions(
 #### SubscribeOptions
 
 ```python
-from gz_transport_py import SubscribeOptions
+from gz_transport import SubscribeOptions
 
 options = SubscribeOptions(
     throttled=True,
@@ -263,7 +268,7 @@ GZ_TRANSPORT_IMPLEMENTATION=zeromq python examples/gi_bridge.py \
 Or in Python code:
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.image_pb2 import Image
 
 node = Node(verbose=True)

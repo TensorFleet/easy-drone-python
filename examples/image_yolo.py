@@ -24,7 +24,7 @@ import onnxruntime as ort
 import zenoh
 
 try:
-    from gz_transport_py import Node
+    from gz_transport import Node
     from gz.msgs.image_pb2 import Image
     from gz.msgs import image_pb2
 except Exception as e:

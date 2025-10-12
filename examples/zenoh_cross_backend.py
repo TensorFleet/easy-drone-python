@@ -22,7 +22,7 @@ import time
 import threading
 
 # We'll programmatically set the backend for different nodes
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 
