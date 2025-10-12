@@ -1,6 +1,6 @@
-# Pure Python Gazebo Transport
+# Easy Drone - Pure Python Gazebo Transport
 
-A pure Python implementation of Gazebo Transport (gz-transport) providing pub/sub messaging with automatic discovery.
+A pure Python implementation of Gazebo Transport (gz-transport) for easy drone communication, providing pub/sub messaging with automatic discovery.
 
 ## Features
 
@@ -15,8 +15,6 @@ A pure Python implementation of Gazebo Transport (gz-transport) providing pub/su
 
 ## Installation
 
-> **📘 See [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions and troubleshooting.**
-
 ### Quick Install
 
 ```bash
@@ -25,35 +23,39 @@ python3 -m venv venv
 source venv/bin/activate  # On Linux/Mac
 
 # Install the package
-cd /path/to/gz-transport-py
+cd /path/to/easy-drone-python
 pip install -e .
 ```
 
-This installs gz-transport-py with **integrated gz-msgs** (212+ message types included!).
+This installs `easy-drone` with **integrated gz-msgs** (212+ message types included!).
+
+### Install with Optional Features
+
+```bash
+# Install with Zenoh backend support
+pip install -e .[zenoh]
+
+# Install with YOLO inference support
+pip install -e .[yolo]
+
+# Install with all optional features
+pip install -e .[all]
+
+# Install for development
+pip install -e .[dev]
+```
 
 ### Requirements
 
 - Python 3.8+
-- `pyzmq>=25.0.0` - ZeroMQ for transport
-- `protobuf>=4.21.0` - Protocol buffers (**must be 4.21.0 or newer**)
+- `pyzmq>=25.0.0` - ZeroMQ for transport (installed automatically)
+- `protobuf>=4.25.0` - Protocol buffers (installed automatically, **must be 4.25.0 or newer**)
 
-### Optional: Zenoh Backend
+### Optional Dependencies
 
-To use the Zenoh transport backend:
-
-```bash
-pip install eclipse-zenoh
-```
-
-### Troubleshooting
-
-If you get `cannot import name 'runtime_version'` error, you have an old protobuf:
-
-```bash
-./fix_protobuf.sh
-# OR
-pip uninstall protobuf && pip install 'protobuf>=4.21.0'
-```
+- **Zenoh Backend**: `pip install -e .[zenoh]` - For Zenoh transport support
+- **YOLO Inference**: `pip install -e .[yolo]` - For computer vision examples with YOLO
+- **Development Tools**: `pip install -e .[dev]` - For testing and development
 
 ## Quick Start
 
@@ -98,7 +100,7 @@ while True:
 
 ## Examples
 
-See the `examples/` directory for complete examples:
+See the `examples/` directory for complete examples. All examples work with the installed `easy-drone` package.
 
 **ZeroMQ Backend (default):**
 
@@ -112,20 +114,31 @@ See the `examples/` directory for complete examples:
 - `zenoh_subscriber.py` - Zenoh-based subscriber
 - `zenoh_cross_backend.py` - Demonstrates backend isolation
 
+**Computer Vision:**
+
+- `image_yolo.py` - YOLO object detection from Gazebo camera
+- `gi_bridge.py` - GStreamer video bridge from Gazebo
+
 ### Running Examples
+
+First, install easy-drone:
+
+```bash
+pip install -e .
+```
+
+Then run examples from anywhere:
 
 Terminal 1 (Subscriber):
 
 ```bash
-cd examples
-python3 simple_subscriber.py
+python examples/simple_subscriber.py
 ```
 
 Terminal 2 (Publisher):
 
 ```bash
-cd examples
-python3 simple_publisher.py
+python examples/simple_publisher.py
 ```
 
 ## API Reference
@@ -389,11 +402,12 @@ Environment variables:
 ### Import errors
 
 ```bash
-# Install dependencies
-pip install pyzmq protobuf
+# Make sure easy-drone is installed
+pip install -e .
 
-# For gz-msgs compatibility
-pip install gz-msgs  # if available
+# If you get import errors, reinstall with:
+pip uninstall easy-drone
+pip install -e .
 ```
 
 ## Development

@@ -1,11 +1,23 @@
-pyzmq>=25.0.0
-protobuf>=4.21.0
-eclipse-zenoh
+# Easy-Drone Requirements
+# 
+# Install with: pip install -e .
+# Or with optional features: pip install -e .[zenoh,yolo,all]
 
-# YOLO inference dependencies (for image_yolo.py example)
-# Works with standard pip-installed OpenCV (no special compilation needed!)
-opencv-python>=4.5.0
-numpy>=1.21.0
-onnxruntime>=1.12.0
-matplotlib>=3.5.0
+# Core requirements (installed automatically)
+pyzmq>=25.0.0
+protobuf>=4.25.0  # Requires runtime_version support
+
+# Optional: Zenoh backend
+# Install with: pip install -e .[zenoh]
+# eclipse-zenoh
+
+# Optional: YOLO inference support
+# Install with: pip install -e .[yolo]
+# opencv-python>=4.5.0
+# numpy>=1.21.0
+# onnxruntime>=1.12.0
+# matplotlib>=3.5.0
+
+# Note: Use setup.py extras_require for optional dependencies
+# Example: pip install -e .[all]  # installs all optional features
 

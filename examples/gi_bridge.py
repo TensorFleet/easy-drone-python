@@ -9,8 +9,9 @@ Sends raw H.264 stream (no RTP encapsulation) for simpler decoding.
 
 Defaults to software x264 encoder, auto-switches to NVENC if available.
 
-This version uses gz-transport-py (custom Python library).
+Note: Install easy-drone first with: pip install -e .
 """
+from gi.repository import Gst, GLib
 import argparse
 import os
 import signal
@@ -18,18 +19,13 @@ import sys
 
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 try:
     from gz_transport_py import Node
     from gz.msgs.image_pb2 import Image
 except Exception as e:
-    print("[gz_video_bridge] ERROR: gz-transport-py or gz-msgs not available.")
-    print("Install gz-transport-py: cd gz-transport-py && pip install -e .")
-    print("Install gz-msgs: cd gz-msgs-py && pip install -e .")
+    print("[gz_video_bridge] ERROR: easy-drone is not installed.")
+    print("Install easy-drone: pip install -e .")
     raise
 
 
@@ -57,20 +53,22 @@ class GzToGStreamerBridge:
 
         # Create node with verbose output
         self.node = Node(verbose=True)
-        
+
         # Get manual publisher address if specified
-        publisher_addr = args.publisher_address or os.getenv('GZ_PUBLISHER_ADDRESS')
-        
+        publisher_addr = args.publisher_address or os.getenv(
+            'GZ_PUBLISHER_ADDRESS')
+
         # Subscribe to image topic
         # Note: gz-transport-py uses (msg_type, topic, callback) order
         ok = self.node.subscribe(
-            Image, 
-            self.gz_topic, 
+            Image,
+            self.gz_topic,
             self._on_new_gz_frame,
             publisher_address=publisher_addr
         )
         if not ok:
-            raise RuntimeError(f"Failed to subscribe to Gazebo topic: {self.gz_topic}")
+            raise RuntimeError(
+                f"Failed to subscribe to Gazebo topic: {self.gz_topic}")
 
         self.main_loop = GLib.MainLoop()
 
@@ -121,7 +119,8 @@ class GzToGStreamerBridge:
 
     def run(self) -> None:
         self.pipeline.set_state(Gst.State.PLAYING)
-        print(f"[gz_video_bridge] Streaming raw H.264 to udp://{self.udp_host}:{self.udp_port}")
+        print(
+            f"[gz_video_bridge] Streaming raw H.264 to udp://{self.udp_host}:{self.udp_port}")
         print(f"[gz_video_bridge] Subscribed: {self.gz_topic}")
         print(f"[gz_video_bridge] Note: Sending raw H.264, not RTP (no rtph264pay)")
 
@@ -130,7 +129,8 @@ class GzToGStreamerBridge:
             # After 5 seconds, if caps still None, likely no frames
             src = self.appsrc
             if src is not None and src.get_property('caps') is None:
-                print("[gz_video_bridge] WARNING: No frames received from Gazebo yet.")
+                print(
+                    "[gz_video_bridge] WARNING: No frames received from Gazebo yet.")
                 print("  Troubleshooting:")
                 print("   - Verify publisher visible: gz topic -i -t", self.gz_topic)
                 print("   - Echo messages: gz topic -e -t", self.gz_topic)
@@ -158,14 +158,22 @@ class GzToGStreamerBridge:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Gazebo → GStreamer UDP H.264 bridge (raw H.264, no RTP)')
-    parser.add_argument('--gz-topic', default='/camera', help='Gazebo image topic')
-    parser.add_argument('--ip', default=os.getenv('GSTREAMER_UDP_HOST', '127.0.0.1'), help='Destination IP')
-    parser.add_argument('--port', type=int, default=int(os.getenv('GSTREAMER_UDP_PORT', '5600')), help='Destination UDP port')
-    parser.add_argument('--fps', type=int, default=30, help='Assumed frame rate for caps')
-    parser.add_argument('--bitrate', type=int, default=1500, help='Target bitrate (kbps)')
-    parser.add_argument('--encoder', choices=['x264', 'nvenc', 'auto'], default=os.getenv('GST_ENCODER', 'x264'), help='H.264 encoder to use')
-    parser.add_argument('--publisher-address', help='Direct publisher address (bypasses discovery). Format: tcp://host:port')
+    parser = argparse.ArgumentParser(
+        description='Gazebo → GStreamer UDP H.264 bridge (raw H.264, no RTP)')
+    parser.add_argument('--gz-topic', default='/camera',
+                        help='Gazebo image topic')
+    parser.add_argument(
+        '--ip', default=os.getenv('GSTREAMER_UDP_HOST', '127.0.0.1'), help='Destination IP')
+    parser.add_argument('--port', type=int, default=int(
+        os.getenv('GSTREAMER_UDP_PORT', '5600')), help='Destination UDP port')
+    parser.add_argument('--fps', type=int, default=30,
+                        help='Assumed frame rate for caps')
+    parser.add_argument('--bitrate', type=int, default=1500,
+                        help='Target bitrate (kbps)')
+    parser.add_argument('--encoder', choices=['x264', 'nvenc', 'auto'], default=os.getenv(
+        'GST_ENCODER', 'x264'), help='H.264 encoder to use')
+    parser.add_argument('--publisher-address',
+                        help='Direct publisher address (bypasses discovery). Format: tcp://host:port')
     return parser.parse_args()
 
 
@@ -185,4 +193,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
