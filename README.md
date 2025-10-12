@@ -1,5 +1,10 @@
 # Easy Drone - Pure Python Gazebo Transport
 
+[![Tests](https://github.com/TensorFleet/easy-drone-python/workflows/Tests/badge.svg)](https://github.com/TensorFleet/easy-drone-python/actions)
+[![PyPI](https://img.shields.io/pypi/v/easy-drone)](https://pypi.org/project/easy-drone/)
+[![Python](https://img.shields.io/pypi/pyversions/easy-drone)](https://pypi.org/project/easy-drone/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 A pure Python implementation of Gazebo Transport (gz-transport) for easy drone communication, providing pub/sub messaging with automatic discovery.
 
 ## Features
