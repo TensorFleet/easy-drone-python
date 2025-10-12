@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script for gz-transport-py with integrated gz-msgs
+Setup script for easy-drone - Pure Python Gazebo Transport implementation
 """
 
 from setuptools import setup, find_packages
@@ -9,14 +9,15 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="gz-transport-py",
+    name="easy-drone",
     version="0.1.0",
-    author="Your Name",
-    description="Pure Python implementation of Gazebo Transport with integrated gz-msgs",
+    author="Easy Drone Contributors",
+    description="Pure Python implementation of Gazebo Transport for easy drone communication",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/gz-transport-py",
-    packages=find_packages(include=['gz_transport_py', 'gz_transport_py.*', 'gz', 'gz.*']),
+    url="https://github.com/TensorFleet/easy-drone-python",
+    packages=find_packages(
+        include=['gz_transport_py', 'gz_transport_py.*', 'gz', 'gz.*']),
     package_data={
         'gz.msgs': ['*.py', '*.pyi'],
     },
@@ -36,9 +37,18 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "pyzmq>=25.0.0",
-        "protobuf>=4.21.0",
+        "protobuf>=4.25.0",  # Requires runtime_version support
     ],
     extras_require={
+        "zenoh": [
+            "eclipse-zenoh",
+        ],
+        "yolo": [
+            "opencv-python>=4.5.0",
+            "numpy>=1.21.0",
+            "onnxruntime>=1.12.0",
+            "matplotlib>=3.5.0",
+        ],
         "dev": [
             "pytest>=7.0",
             "pytest-cov>=4.0",
@@ -50,4 +60,3 @@ setup(
     zip_safe=False,
     include_package_data=True,
 )
-
