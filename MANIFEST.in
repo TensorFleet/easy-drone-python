@@ -4,7 +4,7 @@ include requirements.txt
 include pyproject.toml
 
 recursive-include gz *.py *.pyi
-recursive-include gz_transport_py *.py *.pyi
+recursive-include gz_transport *.py *.pyi
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 

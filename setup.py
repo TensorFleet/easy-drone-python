@@ -17,7 +17,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/TensorFleet/easy-drone-python",
     packages=find_packages(
-        include=['gz_transport_py', 'gz_transport_py.*', 'gz', 'gz.*']),
+        include=['gz_transport', 'gz_transport.*', 'gz', 'gz.*']),
     package_data={
         'gz.msgs': ['*.py', '*.pyi'],
     },

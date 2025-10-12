@@ -17,7 +17,7 @@ Environment Variables:
 import os
 import time
 import sys
-from gz_transport_py import Node
+from gz_transport import Node
 
 
 # Create a simple StringMsg for demonstration

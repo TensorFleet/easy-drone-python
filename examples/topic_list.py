@@ -6,7 +6,7 @@ Note: Install easy-drone first with: pip install -e .
 """
 
 import time
-from gz_transport_py import Node
+from gz_transport import Node
 
 
 def main():

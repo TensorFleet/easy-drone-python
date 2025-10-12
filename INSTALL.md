@@ -38,7 +38,7 @@ pip install -e .
 ```
 
 This installs:
-- Core `gz_transport_py` module
+- Core `gz_transport` module
 - Integrated `gz.msgs` protobuf messages (212+ message types)
 - ZeroMQ backend (default)
 - All required dependencies
@@ -73,10 +73,10 @@ Test that the package is installed correctly:
 
 ```bash
 # Test import
-python3 -c "from gz_transport_py import Node; print('✓ Easy-Drone installed successfully!')"
+python3 -c "from gz_transport import Node; print('✓ Easy-Drone installed successfully!')"
 
 # Check installed version
-python3 -c "import gz_transport_py; print(f'Version: {gz_transport_py.__version__}')"
+python3 -c "import gz_transport; print(f'Version: {gz_transport.__version__}')"
 ```
 
 ### 4. Run Examples
@@ -161,7 +161,7 @@ pip uninstall easy-drone
 
 After installation, you'll have access to:
 
-- **gz_transport_py**: Core transport library
+- **gz_transport**: Core transport library
   - `Node`: Main communication node
   - `Publisher`: Message publisher
   - `NodeOptions`, `AdvertiseOptions`, `SubscribeOptions`: Configuration

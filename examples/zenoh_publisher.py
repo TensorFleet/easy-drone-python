@@ -20,7 +20,7 @@ import time
 # Set Zenoh implementation before importing gz_transport_py
 os.environ['GZ_TRANSPORT_IMPLEMENTATION'] = 'zenoh'
 
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 

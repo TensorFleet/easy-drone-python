@@ -62,7 +62,7 @@ pip install -e .[dev]
 ### Publisher
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 # Create node
@@ -80,7 +80,7 @@ pub.publish(msg)
 ### Subscriber
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 def callback(msg):
@@ -148,7 +148,7 @@ python examples/simple_publisher.py
 Main interface for communication.
 
 ```python
-from gz_transport_py import Node, NodeOptions
+from gz_transport import Node, NodeOptions
 
 # Create node
 node = Node()
@@ -188,7 +188,7 @@ pub = node.advertise("/my_topic", MyMsgType)
 #### NodeOptions
 
 ```python
-from gz_transport_py import NodeOptions
+from gz_transport import NodeOptions
 
 options = NodeOptions(
     namespace="my_namespace",
@@ -202,7 +202,7 @@ options.add_topic_remap("/old_topic", "/new_topic")
 #### AdvertiseOptions
 
 ```python
-from gz_transport_py import AdvertiseOptions, Scope
+from gz_transport import AdvertiseOptions, Scope
 
 options = AdvertiseOptions(
     scope=Scope.ALL  # PROCESS, HOST, or ALL
@@ -212,7 +212,7 @@ options = AdvertiseOptions(
 #### SubscribeOptions
 
 ```python
-from gz_transport_py import SubscribeOptions
+from gz_transport import SubscribeOptions
 
 options = SubscribeOptions(
     throttled=True,
@@ -263,7 +263,7 @@ GZ_TRANSPORT_IMPLEMENTATION=zeromq python examples/gi_bridge.py \
 Or in Python code:
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.image_pb2 import Image
 
 node = Node(verbose=True)

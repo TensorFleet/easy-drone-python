@@ -8,7 +8,7 @@ Note: Install easy-drone first with: pip install -e .
 """
 
 import time
-from gz_transport_py import Node
+from gz_transport import Node
 
 # You'll need to have protobuf message definitions
 # For this example, we'll create a simple one

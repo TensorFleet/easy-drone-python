@@ -21,7 +21,7 @@ import gi
 gi.require_version('Gst', '1.0')
 
 try:
-    from gz_transport_py import Node
+    from gz_transport import Node
     from gz.msgs.image_pb2 import Image
 except Exception as e:
     print("[gz_video_bridge] ERROR: easy-drone is not installed.")
