@@ -6,7 +6,7 @@ Successfully added complete Zenoh backend support to gz-transport-py, matching t
 
 ## What Was Implemented
 
-### 1. Core Zenoh Backend (`gz_transport_py/zenoh_backend.py`)
+### 1. Core Zenoh Backend (`gz_transport/zenoh_backend.py`)
 
 **New Classes:**
 
@@ -36,7 +36,7 @@ Successfully added complete Zenoh backend support to gz-transport-py, matching t
 - Error handling with graceful fallback
 - Verbose mode for debugging
 
-### 2. Updated Node Class (`gz_transport_py/node.py`)
+### 2. Updated Node Class (`gz_transport/node.py`)
 
 **New Functionality:**
 
@@ -63,7 +63,7 @@ Successfully added complete Zenoh backend support to gz-transport-py, matching t
   - `advertised_topics()`: Works with both backends
   - `subscribed_topics()`: Works with both backends
 
-### 3. Updated Publisher Class (`gz_transport_py/publisher.py`)
+### 3. Updated Publisher Class (`gz_transport/publisher.py`)
 
 **New Functionality:**
 
@@ -287,7 +287,7 @@ python3 examples/zenoh_subscriber.py
 
 ### New Files
 
-- `gz_transport_py/zenoh_backend.py` - Core Zenoh implementation (315 lines)
+- `gz_transport/zenoh_backend.py` - Core Zenoh implementation (315 lines)
 - `examples/zenoh_publisher.py` - Zenoh publisher example (82 lines)
 - `examples/zenoh_subscriber.py` - Zenoh subscriber example (75 lines)
 - `examples/zenoh_cross_backend.py` - Backend isolation demo (92 lines)
@@ -297,8 +297,8 @@ python3 examples/zenoh_subscriber.py
 ### Modified Files
 
 - `requirements.txt` - Added zenoh dependency
-- `gz_transport_py/node.py` - Added backend selection and Zenoh support (521 lines, ~150 lines added/modified)
-- `gz_transport_py/publisher.py` - Added backend abstraction (106 lines, ~30 lines modified)
+- `gz_transport/node.py` - Added backend selection and Zenoh support (521 lines, ~150 lines added/modified)
+- `gz_transport/publisher.py` - Added backend abstraction (106 lines, ~30 lines modified)
 - `README.md` - Updated with Zenoh documentation
 - `PROJECT_SUMMARY.md` - Updated with implementation status
 

@@ -14,12 +14,12 @@ echo "compatibility issues."
 echo ""
 
 # Backup original file
-NODEFILE="gz_transport_py/node.py"
-BACKUP="gz_transport_py/node.py.backup.$(date +%s)"
+NODEFILE="gz_transport/node.py"
+BACKUP="gz_transport/node.py.backup.$(date +%s)"
 
 if [ ! -f "$NODEFILE" ]; then
     echo "Error: $NODEFILE not found"
-    echo "Are you in the gz-transport-py directory?"
+    echo "Are you in the easy-drone-python directory?"
     exit 1
 fi
 

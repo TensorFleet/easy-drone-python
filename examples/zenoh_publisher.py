@@ -2,7 +2,7 @@
 """
 Example: Zenoh-based Publisher
 
-This example demonstrates how to use gz-transport-py with the Zenoh backend.
+This example demonstrates how to use gz-transport with the Zenoh backend.
 
 To use Zenoh backend:
 1. Install zenoh: pip install eclipse-zenoh
@@ -17,7 +17,7 @@ import os
 import sys
 import time
 
-# Set Zenoh implementation before importing gz_transport_py
+# Set Zenoh implementation before importing gz_transport
 os.environ['GZ_TRANSPORT_IMPLEMENTATION'] = 'zenoh'
 
 from gz_transport import Node

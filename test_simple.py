@@ -7,7 +7,7 @@ This creates a publisher and subscriber in the same process to test basic operat
 
 import time
 import threading
-from gz_transport_py import Node
+from gz_transport import Node
 
 
 # Simple message type for testing

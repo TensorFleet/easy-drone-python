@@ -38,13 +38,13 @@ export GZ_TRANSPORT_IMPLEMENTATION=zenoh
 python3 your_script.py
 ```
 
-Or set it programmatically in your script (before importing gz_transport_py):
+Or set it programmatically in your script (before importing gz_transport):
 
 ```python
 import os
 os.environ['GZ_TRANSPORT_IMPLEMENTATION'] = 'zenoh'
 
-from gz_transport_py import Node
+from gz_transport import Node
 ```
 
 ### Code Examples
@@ -57,7 +57,7 @@ The API is exactly the same regardless of backend. Here's a simple example:
 import os
 os.environ['GZ_TRANSPORT_IMPLEMENTATION'] = 'zenoh'
 
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 import time
 
@@ -77,7 +77,7 @@ while True:
 import os
 os.environ['GZ_TRANSPORT_IMPLEMENTATION'] = 'zenoh'
 
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 import time
 

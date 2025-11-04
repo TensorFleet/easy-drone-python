@@ -3,7 +3,7 @@
 Quick test to verify multiple nodes can be created.
 """
 
-from gz_transport_py import Node
+from gz_transport import Node
 import time
 
 print("Test: Creating multiple nodes in same process")

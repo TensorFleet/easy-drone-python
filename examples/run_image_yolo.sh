@@ -97,10 +97,10 @@ fi
 
 # Check dependencies
 echo "Checking dependencies..."
-if python3 -c "import gz_transport_py" 2>/dev/null; then
-    echo "✓ gz-transport-py installed"
+if python3 -c "import gz_transport" 2>/dev/null; then
+    echo "✓ gz-transport installed"
 else
-    echo "✗ ERROR: gz-transport-py not installed!"
+    echo "✗ ERROR: gz-transport not installed!"
     echo "  Install with: cd $PROJECT_DIR && pip install -e ."
     deactivate
     exit 1
