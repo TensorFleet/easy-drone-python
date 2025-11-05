@@ -7,7 +7,7 @@ This creates a publisher and subscriber in the same process to test basic operat
 
 import time
 import threading
-from gz_transport_py import Node
+from gz_transport import Node
 
 
 # Simple message type for testing
@@ -35,22 +35,22 @@ def test_basic_pubsub():
     
     def callback(msg):
         received_messages.append(msg.data)
-        print(f"  ✓ Received: {msg.data}")
+        print(f"  [OK] Received: {msg.data}")
     
     # Create subscriber node
     print("\n1. Creating subscriber node...")
     sub_node = Node(verbose=False)
     sub_node.subscribe(TestMsg, "/test_topic", callback)
-    print("   ✓ Subscriber ready")
-    
+    print("   [OK] Subscriber ready")
+
     # Wait for discovery to initialize
     time.sleep(0.5)
-    
+
     # Create publisher node
     print("\n2. Creating publisher node...")
     pub_node = Node(verbose=False)
     pub = pub_node.advertise("/test_topic", TestMsg)
-    print("   ✓ Publisher ready")
+    print("   [OK] Publisher ready")
     
     # Wait for discovery
     time.sleep(1.0)
@@ -75,14 +75,14 @@ def test_basic_pubsub():
     print("\n5. Cleaning up...")
     pub_node.shutdown()
     sub_node.shutdown()
-    print("   ✓ Cleanup complete")
-    
+    print("   [OK] Cleanup complete")
+
     # Verify
     if len(received_messages) >= 4:  # Allow some loss due to timing
-        print("\n✅ TEST PASSED")
+        print("\n[PASS] TEST PASSED")
         return True
     else:
-        print(f"\n❌ TEST FAILED: Only received {len(received_messages)}/5 messages")
+        print(f"\n[FAIL] TEST FAILED: Only received {len(received_messages)}/5 messages")
         return False
 
 
@@ -129,12 +129,12 @@ def test_multiple_topics():
     print(f"   Topic2 received: {len(topic2_msgs)} messages")
     
     node.shutdown()
-    
+
     if len(topic1_msgs) >= 2 and len(topic2_msgs) >= 2:
-        print("\n✅ TEST PASSED")
+        print("\n[PASS] TEST PASSED")
         return True
     else:
-        print("\n❌ TEST FAILED")
+        print("\n[FAIL] TEST FAILED")
         return False
 
 
@@ -167,12 +167,12 @@ def test_topic_discovery():
     
     node1.shutdown()
     node2.shutdown()
-    
+
     if has_topic1 and has_topic2:
-        print("\n✅ TEST PASSED")
+        print("\n[PASS] TEST PASSED")
         return True
     else:
-        print("\n❌ TEST FAILED: Not all topics discovered")
+        print("\n[FAIL] TEST FAILED: Not all topics discovered")
         return False
 
 
@@ -202,12 +202,12 @@ def test_unadvertise():
     print(f"   Advertised: {topics}")
     
     node.shutdown()
-    
+
     if len(topics) == 0:
-        print("\n✅ TEST PASSED")
+        print("\n[PASS] TEST PASSED")
         return True
     else:
-        print("\n❌ TEST FAILED: Topic still advertised")
+        print("\n[FAIL] TEST FAILED: Topic still advertised")
         return False
 
 
@@ -240,7 +240,7 @@ def main():
     total = len(results)
     
     for name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
+        status = "[PASS]" if result else "[FAIL]"
         print(f"  {status} - {name}")
     
     print("\n" + "=" * 50)
@@ -248,10 +248,10 @@ def main():
     print("=" * 50)
     
     if passed == total:
-        print("\n🎉 All tests passed!")
+        print("\nAll tests passed!")
         return 0
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed")
+        print(f"\nWARNING: {total - passed} test(s) failed")
         return 1
 
 

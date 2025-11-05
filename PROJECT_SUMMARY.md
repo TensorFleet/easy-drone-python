@@ -41,7 +41,7 @@ A **pure Python implementation** of Gazebo Transport that provides pub/sub messa
 
 ```
 gz-transport-py/
-├── gz_transport_py/          # Main library
+├── gz_transport/             # Main library
 │   ├── __init__.py           # Public API exports
 │   ├── node.py               # Node class (main interface)
 │   ├── discovery.py          # UDP multicast discovery
@@ -132,7 +132,7 @@ python3 test_simple.py
 ### Basic Publisher
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 node = Node()
@@ -146,7 +146,7 @@ pub.publish(msg)
 ### Basic Subscriber
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 def callback(msg):
@@ -159,7 +159,7 @@ node.subscribe(StringMsg, "/topic", callback)
 ### With Namespaces
 
 ```python
-from gz_transport_py import Node, NodeOptions
+from gz_transport import Node, NodeOptions
 
 options = NodeOptions(namespace="robot1")
 node = Node(options)

@@ -99,7 +99,7 @@ Monitor should show both robots' messages.
 ### Minimal Publisher
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 
 # Define a simple message
 class MyMsg:
@@ -124,7 +124,7 @@ pub.publish(msg)
 ### Minimal Subscriber
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 
 class MyMsg:
     def __init__(self):
@@ -152,7 +152,7 @@ while True:
 If you have gz-msgs installed:
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 # Publisher
@@ -187,7 +187,7 @@ pub.Publish(msg);
 **Python Subscriber:**
 
 ```python
-from gz_transport_py import Node
+from gz_transport import Node
 from gz.msgs.stringmsg_pb2 import StringMsg
 
 def callback(msg):
@@ -221,7 +221,7 @@ pip install --upgrade pyzmq protobuf
 - Read the full [README.md](README.md)
 - Check out [examples/](examples/) directory
 - Try integrating with your robot/simulation
-- Explore the API in `gz_transport_py/` source
+- Explore the API in `gz_transport/` source
 
 ## Performance Tips
 

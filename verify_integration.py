@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verification script for gz-transport-py with integrated gz-msgs.
+Verification script for gz-transport with integrated gz-msgs.
 
 This script verifies that both packages are properly integrated and working.
 """
@@ -15,10 +15,10 @@ def test_imports():
     print("=" * 60)
     
     try:
-        # Test gz_transport_py imports
-        print("✓ Importing gz_transport_py...")
-        import gz_transport_py
-        from gz_transport_py import Node
+        # Test gz_transport imports
+        print("✓ Importing gz_transport...")
+        import gz_transport
+        from gz_transport import Node
         print("  - Node class imported successfully")
         
         # Test gz.msgs imports
@@ -143,7 +143,7 @@ def count_available_messages():
 def main():
     """Run all verification tests."""
     print("\n" + "=" * 60)
-    print("GZ-TRANSPORT-PY INTEGRATION VERIFICATION")
+    print("GZ-TRANSPORT INTEGRATION VERIFICATION")
     print("=" * 60)
     
     tests = [
@@ -176,7 +176,7 @@ def main():
     print("\n" + "=" * 60)
     if all_passed:
         print("✓ ALL TESTS PASSED!")
-        print("The gz-transport-py package with integrated gz-msgs is working correctly.")
+        print("The gz-transport package with integrated gz-msgs is working correctly.")
     else:
         print("✗ SOME TESTS FAILED")
         print("Please check the error messages above.")

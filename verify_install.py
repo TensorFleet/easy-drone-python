@@ -15,10 +15,10 @@ def check_import(module_name, display_name=None):
 
     try:
         __import__(module_name)
-        print(f"✓ {display_name}")
+        print(f"[OK]   {display_name}")
         return True
     except ImportError as e:
-        print(f"✗ {display_name} - {str(e)}")
+        print(f"[FAIL] {display_name} - {str(e)}")
         return False
 
 
@@ -62,14 +62,14 @@ def main():
     print("=" * 60)
 
     if core_ok and msgs_ok and deps_ok:
-        print("✓ Easy-Drone is installed correctly!")
+        print("[OK] Easy-Drone is installed correctly!")
         print()
         print("You can now run examples:")
         print("  python examples/simple_publisher.py")
         print("  python examples/simple_subscriber.py")
         return 0
     else:
-        print("✗ Installation incomplete or has issues.")
+        print("[FAIL] Installation incomplete or has issues.")
         print()
         print("Try reinstalling:")
         print("  pip install -e .")
