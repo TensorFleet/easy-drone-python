@@ -8,11 +8,11 @@ import roslibpy
 
 ARM_WAIT_SECONDS = 3.0          # Wait after connect before arming
 TAKEOFF_ALTITUDE = 3.0          # Target takeoff altitude (m AGL from home_z)
-POSITION_TOLERANCE = 1.0        # Waypoint distance tolerance (m)
+POSITION_TOLERANCE = 1.5        # Waypoint distance tolerance (m) for long legs
 ALTITUDE_TOLERANCE = 0.3        # Altitude tolerance (m)
 TIMEOUT = 900.0                 # Generic timeout for long legs (s)
-SETPOINT_HZ = 10.0              # Stream rate for position setpoints (Hz)
-SETPOINT_ACCEPT_MODES = ('GUIDED', 'OFFBOARD')  # Modes that accept external setpoints
+SETPOINT_HZ = 20.0              # Stream rate for position setpoints (Hz) >2 Hz required
+SETPOINT_ACCEPT_MODES = ('OFFBOARD',)  # PX4: external setpoints only in OFFBOARD
 
 
 class DroneError(Exception):
@@ -21,7 +21,7 @@ class DroneError(Exception):
 
 class MavrosBridgeController:
     """
-    MAVROS (ROS 2) over rosbridge using roslibpy.
+    PX4 SITL via MAVROS (ROS 2) over rosbridge using roslibpy.
 
     Subs:
       /mavros/state                   (mavros_msgs/State)
@@ -29,7 +29,6 @@ class MavrosBridgeController:
       /mavros/global_position/global  (sensor_msgs/NavSatFix)
 
     Pubs:
-      /mavros/setpoint_position/local (geometry_msgs/PoseStamped)
       /mavros/setpoint_raw/local      (mavros_msgs/PositionTarget)
 
     Srvs:
@@ -37,14 +36,14 @@ class MavrosBridgeController:
       /mavros/cmd/takeoff             (mavros_msgs/CommandTOL)
       /mavros/cmd/land                (mavros_msgs/CommandTOL)
       /mavros/cmd/command             (mavros_msgs/CommandLong)
+      /mavros/set_mode                (mavros_msgs/SetMode)
       /mavros/sys/set_parameters      (rcl_interfaces/srv/SetParameters)
       /mavros/param/set               (mavros_msgs/ParamSetV2)
 
     Notes:
-      * We never change flight mode; ensure GUIDED/OFFBOARD yourself before raw setpoints.
+      * We now do the PX4 OFFBOARD handshake correctly (pre-stream setpoints, then set OFFBOARD).
       * AGL is |z - home_z| (sign-agnostic).
-      * Battery/power arming checks are disabled automatically for PX4 SITL (CBRK_SUPPLY_CHK, COM_ARM_BAT_MIN),
-        and the FCU is rebooted before flight sequence.
+      * Battery/power arming checks are disabled for SITL, then FCU is rebooted before flight.
     """
 
     def __init__(self, host='172.16.0.10', port=9091):
@@ -66,7 +65,6 @@ class MavrosBridgeController:
         self.global_sub = roslibpy.Topic(self.ros, '/mavros/global_position/global', 'sensor_msgs/NavSatFix')
 
         # --- Topics (publishers) ---
-        self.setpoint_pub = roslibpy.Topic(self.ros, '/mavros/setpoint_position/local', 'geometry_msgs/PoseStamped')
         self.setpoint_raw_pub = roslibpy.Topic(self.ros, '/mavros/setpoint_raw/local', 'mavros_msgs/PositionTarget')
 
         # --- Services (MAVROS) ---
@@ -74,6 +72,7 @@ class MavrosBridgeController:
         self.takeoff_srv = roslibpy.Service(self.ros, '/mavros/cmd/takeoff', 'mavros_msgs/CommandTOL')
         self.land_srv = roslibpy.Service(self.ros, '/mavros/cmd/land', 'mavros_msgs/CommandTOL')
         self.cmd_long_srv = roslibpy.Service(self.ros, '/mavros/cmd/command', 'mavros_msgs/CommandLong')
+        self.mode_srv = roslibpy.Service(self.ros, '/mavros/set_mode', 'mavros_msgs/SetMode')
 
         # ROS 2 parameters on MAVROS node
         self.param_srv = roslibpy.Service(self.ros, '/mavros/sys/set_parameters', 'rcl_interfaces/srv/SetParameters')
@@ -256,7 +255,6 @@ class MavrosBridgeController:
         self._wait_for_fcu_cycle()
 
     def _wait_for_fcu_cycle(self, disconnect_timeout=10.0, reconnect_timeout=30.0):
-        # Wait for state.connected to go False (it might already be False briefly)
         t0 = time.time()
         while self.state and self.state.get('connected', True):
             if time.time() - t0 > disconnect_timeout:
@@ -264,23 +262,19 @@ class MavrosBridgeController:
                 break
             time.sleep(0.1)
 
-        # Now wait for state.connected True again
         t1 = time.time()
         while (not self.state) or (not self.state.get('connected', False)):
             if time.time() - t1 > reconnect_timeout:
                 raise DroneError('Timeout waiting for FCU to reconnect after reboot')
             time.sleep(0.1)
 
-        # Give a moment for topics to resume streaming
         time.sleep(1.0)
 
     # ------------------------------------------------------------------
-    # FCU arming, takeoff/land
+    # FCU arming, offboard, takeoff/land
     # ------------------------------------------------------------------
     def ensure_armed(self):
         self._wait_for_state()
-        self._check_status_ok()
-
         if self.state.get('armed'):
             print('Already armed, skipping arming step')
             return
@@ -301,9 +295,49 @@ class MavrosBridgeController:
             raise DroneError('Vehicle did not arm within timeout')
         print('Vehicle armed')
 
+    def ensure_offboard(self, retries=3, prestream_seconds=1.5):
+        """
+        PX4 OFFBOARD handshake:
+          - stream position setpoints >2 Hz for a short period
+          - set mode OFFBOARD
+          - verify state.mode == 'OFFBOARD'
+        """
+        self._wait_for_pose()
+
+        for attempt in range(1, retries + 1):
+            # Pre-stream current position so mode switch is accepted
+            pos = self.current_pose['pose']['position']
+            x, y, z = pos['x'], pos['y'], pos['z']
+            t_end = time.time() + prestream_seconds
+            while time.time() < t_end:
+                self._publish_position_target(x, y, z)
+                time.sleep(1.0 / SETPOINT_HZ)
+
+            print(f'Setting mode: OFFBOARD (attempt {attempt}/{retries})')
+            req = roslibpy.ServiceRequest({'base_mode': 0, 'custom_mode': 'OFFBOARD'})
+            resp = self.mode_srv.call(req)
+            if not resp.get('mode_sent', False):
+                print('[WARN] FCU rejected OFFBOARD (mode_sent=False)')
+                continue
+
+            # Wait for state to report OFFBOARD
+            start = time.time()
+            while (self.state is None or (self.state.get('mode') or '').upper() != 'OFFBOARD') \
+                    and time.time() - start < 3.0:
+                # keep streaming during wait
+                self._publish_position_target(x, y, z)
+                time.sleep(1.0 / SETPOINT_HZ)
+
+            if (self.state.get('mode') or '').upper() == 'OFFBOARD':
+                print('Mode is now OFFBOARD')
+                return
+
+            print('[WARN] Mode did not switch to OFFBOARD')
+
+        raise DroneError('Unable to enter OFFBOARD after retries')
+
     def ensure_airborne(self, target_alt):
         self._wait_for_pose()
-        self._check_status_ok()
 
         current_agl = self._get_agl()
         if self.state.get('armed') and current_agl > 0.5:
@@ -329,18 +363,13 @@ class MavrosBridgeController:
             self._wait_for_agl(target_alt, ALTITUDE_TOLERANCE, timeout=TIMEOUT, abort_on_disarm=True)
             return
 
-        mode = (self.state.get('mode') or '').upper()
-        if 'GUIDED' not in mode and 'OFFBOARD' not in mode:
-            raise DroneError('Takeoff did not start and current mode does not accept local setpoints '
-                             f'(mode={self.state.get("mode")}). Put FCU into GUIDED/OFFBOARD and retry.')
-        print('Fallback: climbing via local position setpoint...')
-        self._climb_via_local_setpoint(target_alt)
+        # Fallback climb using local setpoints requires OFFBOARD
+        raise DroneError('Takeoff did not start and no GNSS; use takeoff-enabled mode or provide GNSS.')
 
     def _wait_for_agl_change(self, min_increase=0.5, timeout=8.0):
         start_agl = self._get_agl()
         start_time = time.time()
         while time.time() - start_time < timeout:
-            self._check_status_ok()
             if not self.state.get('armed', False):
                 raise DroneError(f'Takeoff aborted: vehicle disarmed at agl {self._get_agl():.2f} m')
             agl = self._get_agl()
@@ -349,35 +378,10 @@ class MavrosBridgeController:
             time.sleep(0.1)
         return False
 
-    def _climb_via_local_setpoint(self, target_agl):
-        self._wait_for_pose()
-        pos = self.current_pose['pose']['position']
-        z_now = pos['z']
-        z_plus = self.home_z + target_agl
-        z_minus = self.home_z - target_agl
-        z_target = z_plus if abs(z_plus - z_now) < abs(z_minus - z_now) else z_minus
-        x_target = pos['x']; y_target = pos['y']
-
-        print(f'Climb fallback: aiming for AGL {target_agl:.2f} m via z_target={z_target:.2f} (home_z={self.home_z:.2f})')
-        start = time.time()
-        while time.time() - start < TIMEOUT:
-            self._check_status_ok()
-            if not self.state.get('armed', False):
-                raise DroneError(f'Climb aborted: disarmed at agl {self._get_agl():.2f} m')
-            self._publish_setpoint_pose(x_target, y_target, z_target)
-
-            agl = self._get_agl()
-            if abs(agl - target_agl) <= ALTITUDE_TOLERANCE:
-                print(f'Altitude reached via fallback: agl {agl:.2f} m (target {target_agl:.2f} m)')
-                return
-            time.sleep(1.0 / SETPOINT_HZ)
-        raise DroneError(f'Fallback climb timeout: last agl {agl:.2f} m, target {target_agl:.2f} m')
-
     def _wait_for_agl(self, target, tol, timeout, abort_on_disarm=False):
         start = time.time()
         last_agl = self._get_agl()
         while time.time() - start < timeout:
-            self._check_status_ok()
             agl = self._get_agl()
             if abs(agl - target) <= tol:
                 print(f'Altitude reached: agl {agl:.2f} m (target {target:.2f} m)')
@@ -414,18 +418,8 @@ class MavrosBridgeController:
         print('Landed and disarmed')
 
     # ------------------------------------------------------------------
-    # Setpoint publishing (PoseStamped and PositionTarget)
+    # Setpoint publishing (PositionTarget)
     # ------------------------------------------------------------------
-    def _publish_setpoint_pose(self, x, y, z):
-        msg = {
-            'header': {'frame_id': 'map'},
-            'pose': {
-                'position': {'x': x, 'y': y, 'z': z},
-                'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
-            },
-        }
-        self.setpoint_pub.publish(roslibpy.Message(msg))
-
     def _publish_position_target(self, x, y, z, yaw=None):
         # mavros_msgs/PositionTarget (position-only)
         IGNORE_VX = 1 << 3; IGNORE_VY = 1 << 4; IGNORE_VZ = 1 << 5
@@ -437,7 +431,7 @@ class MavrosBridgeController:
 
         msg = {
             'header': {'frame_id': 'map'},
-            'coordinate_frame': 1,           # MAV_FRAME_LOCAL_NED
+            'coordinate_frame': 1,           # MAV_FRAME_LOCAL_NED (MAVROS handles ENU/NED)
             'type_mask': type_mask,          # position only
             'position': {'x': x, 'y': y, 'z': z},
             'velocity': {'x': 0.0, 'y': 0.0, 'z': 0.0},
@@ -448,14 +442,14 @@ class MavrosBridgeController:
         self.setpoint_raw_pub.publish(roslibpy.Message(msg))
 
     # ------------------------------------------------------------------
-    # Goto primitive (raw) with acceptance checks
+    # Goto primitive (raw) with OFFBOARD enforcement & acceptance checks
     # ------------------------------------------------------------------
     def fly_to_raw(self, x, y, z, timeout=TIMEOUT):
         self._wait_for_pose()
-        mode = (self.state.get('mode') or '').upper()
-        if not any(m in mode for m in SETPOINT_ACCEPT_MODES):
-            raise DroneError(f'Current mode "{self.state.get("mode")}" does not accept external position setpoints. '
-                             f'Switch to GUIDED/OFFBOARD and retry.')
+
+        # Ensure OFFBOARD (PX4 requirement) before trying to move
+        if (self.state.get('mode') or '').upper() not in SETPOINT_ACCEPT_MODES:
+            self.ensure_offboard()
 
         print(f'Flying to ({x:.1f}, {y:.1f}, {z:.1f}) via PositionTarget')
         start = time.time()
@@ -471,7 +465,7 @@ class MavrosBridgeController:
         last_better = time.time()
 
         while time.time() - start < timeout:
-            self._check_status_ok()
+            # Keep OFFBOARD alive and command the target
             self._publish_position_target(x, y, z)
 
             d = dist()
@@ -483,9 +477,15 @@ class MavrosBridgeController:
                 print(f'Reached waypoint within {d:.2f} m')
                 return
 
+            # If PX4 dropped out of OFFBOARD (e.g., timeout), try to re-enter once
+            if (self.state.get('mode') or '').upper() != 'OFFBOARD':
+                print('[WARN] Dropped out of OFFBOARD; attempting re-entry...')
+                self.ensure_offboard()
+
+            # If after 3s we haven’t improved by at least 0.5 m, assume setpoints are ignored
             if time.time() - last_better > 3.0:
                 raise DroneError('Setpoints appear to be ignored (no progress). '
-                                 'Ensure GUIDED/OFFBOARD and no conflicting mission/loiter.')
+                                 'Check OFFBOARD, EKF position, and that no mission/loiter conflicts.')
 
             time.sleep(1.0 / SETPOINT_HZ)
 
@@ -527,6 +527,9 @@ class MavrosBridgeController:
             self.connect()
             self.ensure_armed()
             self.ensure_airborne(TAKEOFF_ALTITUDE)
+            # Required for PX4 to accept external setpoints:
+            self.ensure_offboard()
+            # Triangle with 300 m edges
             self.fly_triangle_enu(edge_m=300.0)
             self.go_home_and_land()
 
@@ -537,7 +540,6 @@ class MavrosBridgeController:
             print('Shutting down')
             try:
                 self._stop_status_loop()
-                self.setpoint_pub.unadvertise()
                 self.setpoint_raw_pub.unadvertise()
                 self.state_sub.unsubscribe()
                 self.pose_sub.unsubscribe()
@@ -549,7 +551,7 @@ class MavrosBridgeController:
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='MAVROS rosbridge controller')
+    parser = argparse.ArgumentParser(description='MAVROS rosbridge controller (PX4 OFFBOARD)')
     parser.add_argument('--r2b_host', type=str, default='172.16.0.10',
                         help='Hostname/IP of rosbridge server (default: 172.16.0.10)')
     parser.add_argument('--r2b_port', type=int, default=9091,
